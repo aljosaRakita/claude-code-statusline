@@ -39,27 +39,35 @@ fi
 command -v awk >/dev/null 2>&1 || { echo "error: awk is required." >&2; exit 1; }
 command -v git >/dev/null 2>&1 || echo "warning: git not found. The branch segment will stay empty."
 
+# Write the commands with a leading ~ when the prefix sits under $HOME. Claude
+# Code expands it, and it keeps settings.json portable: an absolute /Users/you
+# path breaks the moment the same settings file reaches another machine.
+case "$PREFIX" in
+    "$HOME"/*) PREFIX_CMD="~${PREFIX#"$HOME"}" ;;
+    *)         PREFIX_CMD="$PREFIX" ;;
+esac
+
 # --- Warn about an earlier hand-rolled install ---
 if [ -f "$SETTINGS" ]; then
-    legacy=$(jq -r --arg p "$PREFIX" '
+    legacy=$(jq -r --arg p "$PREFIX" --arg pc "$PREFIX_CMD" '
         [ (.statusLine.command // empty) ]
         + [ (.hooks // {}) | to_entries[] | .value[]? | .hooks[]? | (.command // empty) ]
         | map(select(test("statusline-command\\.sh|session-name-check\\.sh|update-terminal-title\\.sh|record-activity\\.sh")))
-        | map(select(contains($p) | not)) | unique | .[]
+        | map(select((contains($p) or contains($pc)) | not)) | unique | .[]
     ' "$SETTINGS" 2>/dev/null || true)
     if [ -n "$legacy" ]; then
         echo "warning: settings.json already references a status line outside $PREFIX:"
-        printf '  %s\n' $legacy
+        printf '%s\n' "$legacy" | sed 's/^/  /'
         echo "         Those entries are left alone and may duplicate this install."
         echo "         Remove them by hand if you are replacing an older setup."
     fi
 fi
 
-sl_cmd="bash ${PREFIX}/statusline-command.sh"
-ra_cmd="bash ${PREFIX}/hooks/record-activity.sh"
-tt_cmd="bash ${PREFIX}/hooks/update-terminal-title.sh"
-sn_cmd="bash ${PREFIX}/hooks/session-name-check.sh"
-nt_cmd="bash ${PREFIX}/hooks/notify.sh"
+sl_cmd="bash ${PREFIX_CMD}/statusline-command.sh"
+ra_cmd="bash ${PREFIX_CMD}/hooks/record-activity.sh"
+tt_cmd="bash ${PREFIX_CMD}/hooks/update-terminal-title.sh"
+sn_cmd="bash ${PREFIX_CMD}/hooks/session-name-check.sh"
+nt_cmd="bash ${PREFIX_CMD}/hooks/notify.sh"
 
 # Build the merged settings. Existing entries that point into $PREFIX are
 # stripped first, which is what makes a second run a no-op instead of a
@@ -68,14 +76,16 @@ build_settings() {
     local base="{}"
     [ -f "$SETTINGS" ] && base=$(cat "$SETTINGS")
     printf '%s' "$base" | jq \
-        --arg p "$PREFIX" --arg sl "$sl_cmd" --arg ra "$ra_cmd" \
+        --arg p "$PREFIX" --arg pc "$PREFIX_CMD" --arg sl "$sl_cmd" --arg ra "$ra_cmd" \
         --arg tt "$tt_cmd" --arg sn "$sn_cmd" --arg nt "$nt_cmd" \
         --argjson notify "$WITH_NOTIFICATIONS" '
-        def strip($p):
-            map(.hooks |= map(select(((.command // "") | contains($p)) | not)))
+        def strip:
+            map(.hooks |= map(select(
+                (((.command // "") | contains($p)) or ((.command // "") | contains($pc))) | not
+            )))
             | map(select((.hooks | length) > 0));
         def add($ev; $entry):
-            .[$ev] = (((.[$ev] // []) | strip($p)) + [$entry]);
+            .[$ev] = (((.[$ev] // []) | strip) + [$entry]);
 
         .statusLine = { type: "command", command: $sl }
         | .hooks = ((.hooks // {})

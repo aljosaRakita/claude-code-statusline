@@ -112,13 +112,20 @@ echo "== 6. install is idempotent and does not destroy settings =="
 FAKE_PREFIX="${WORK}/install/statusline"
 FAKE_SETTINGS="${WORK}/install/settings.json"
 mkdir -p "${WORK}/install"
+# The installer writes ~/... for a prefix under $HOME, so match the same form
+# the installer would have produced. Matching only the absolute path made the
+# uninstall assertion below pass for the wrong reason.
+case "$FAKE_PREFIX" in
+    "$HOME"/*) P_MATCH="~${FAKE_PREFIX#"$HOME"}" ;;
+    *)         P_MATCH="$FAKE_PREFIX" ;;
+esac
 cat > "$FAKE_SETTINGS" <<'JSON'
 { "model": "opus", "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "echo pre-existing" } ] } ] } }
 JSON
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
 if jq empty "$FAKE_SETTINGS" 2>/dev/null; then ok "settings.json is still valid JSON"; else bad "settings.json is still valid JSON"; fi
-n=$(jq --arg p "$FAKE_PREFIX" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "4" ]; then ok "four hook entries after two installs (no duplicates)"; else bad "four hook entries after two installs" "got ${n}"; fi
 if [ "$(jq -r '.model' "$FAKE_SETTINGS")" = "opus" ]; then ok "unrelated settings preserved"; else bad "unrelated settings preserved"; fi
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
@@ -137,7 +144,7 @@ if has "Opus 5" "$out"; then ok "installed renderer works from its prefix"; else
 echo
 echo "== 8. uninstall removes exactly its own entries =="
 bash "${ROOT}/uninstall.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
-n=$(jq --arg p "$FAKE_PREFIX" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "0" ]; then ok "no status line entries remain"; else bad "no status line entries remain" "got ${n}"; fi
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
     ok "pre-existing hook survived uninstall"
@@ -146,7 +153,28 @@ if jq -e '.statusLine == null' "$FAKE_SETTINGS" >/dev/null; then ok "statusLine 
 if [ ! -d "$FAKE_PREFIX" ]; then ok "installed files removed"; else bad "installed files removed"; fi
 
 echo
-echo "== 9. every script parses =="
+echo "== 9. settings paths stay portable =="
+# An absolute /Users/you path in settings.json breaks the moment that file is
+# shared with another machine. Under $HOME the installer must write ~/... .
+FAKE_HOME="${WORK}/home"
+mkdir -p "${FAKE_HOME}/.claude"
+HOME="$FAKE_HOME" bash "${ROOT}/install.sh" \
+    --prefix "${FAKE_HOME}/.claude/statusline" \
+    --settings "${FAKE_HOME}/.claude/settings.json" >/dev/null 2>&1
+n=$(jq '[ .hooks[]?[]?.hooks[]?.command, .statusLine.command ] | map(select(startswith("bash ~/.claude/statusline/"))) | length' "${FAKE_HOME}/.claude/settings.json" 2>/dev/null)
+if [ "$n" = "5" ]; then ok "commands written as ~/.claude/statusline/..."; else bad "commands written as ~/.claude/statusline/..." "got ${n}"; fi
+if ! grep -q "$FAKE_HOME" "${FAKE_HOME}/.claude/settings.json"; then
+    ok "no absolute home path leaked into settings"
+else bad "no absolute home path leaked into settings" "$(grep -o "${FAKE_HOME}[^\"]*" "${FAKE_HOME}/.claude/settings.json" | head -2)"; fi
+HOME="$FAKE_HOME" bash "${ROOT}/uninstall.sh" \
+    --prefix "${FAKE_HOME}/.claude/statusline" \
+    --settings "${FAKE_HOME}/.claude/settings.json" >/dev/null 2>&1
+if jq -e '(.statusLine == null) and ((.hooks // {}) | length == 0)' "${FAKE_HOME}/.claude/settings.json" >/dev/null 2>&1; then
+    ok "uninstall removes tilde-form entries too"
+else bad "uninstall removes tilde-form entries too" "$(cat "${FAKE_HOME}/.claude/settings.json")"; fi
+
+echo
+echo "== 10. every script parses =="
 for f in "${ROOT}/statusline-command.sh" "${ROOT}/lib/paths.sh" "${ROOT}"/hooks/*.sh "${ROOT}/install.sh" "${ROOT}/uninstall.sh"; do
     if bash -n "$f" 2>/dev/null; then ok "parses $(basename "$f")"; else bad "parses $(basename "$f")"; fi
 done

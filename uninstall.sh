@@ -25,14 +25,23 @@ done
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required." >&2; exit 1; }
 
+case "$PREFIX" in
+    "$HOME"/*) PREFIX_CMD="~${PREFIX#"$HOME"}" ;;
+    *)         PREFIX_CMD="$PREFIX" ;;
+esac
+
 if [ -f "$SETTINGS" ]; then
-    cleaned=$(jq --arg p "$PREFIX" '
-        def strip($p):
-            map(.hooks |= map(select(((.command // "") | contains($p)) | not)))
+    cleaned=$(jq --arg p "$PREFIX" --arg pc "$PREFIX_CMD" '
+        def strip:
+            map(.hooks |= map(select(
+                (((.command // "") | contains($p)) or ((.command // "") | contains($pc))) | not
+            )))
             | map(select((.hooks | length) > 0));
 
-        (if ((.statusLine.command // "") | contains($p)) then del(.statusLine) else . end)
-        | (if .hooks then .hooks |= with_entries(.value |= strip($p)) else . end)
+        (if (((.statusLine.command // "") | contains($p))
+             or ((.statusLine.command // "") | contains($pc)))
+         then del(.statusLine) else . end)
+        | (if .hooks then .hooks |= with_entries(.value |= strip) else . end)
         | (if .hooks then .hooks |= with_entries(select((.value | length) > 0)) else . end)
     ' "$SETTINGS")
 
