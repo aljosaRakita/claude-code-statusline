@@ -1,0 +1,3 @@
+.test-tmp.*
+*.bak-*
+.DS_Store
