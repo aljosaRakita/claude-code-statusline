@@ -10,56 +10,58 @@ Applies to all prose the user reads (chat replies, summaries, plan docs, PR bodi
   - Active voice. Present tense. Imperative for steps ("Run the migration", not "the migration
     should be run").
   - One word, one meaning. Do not use synonyms for variety. Keep the same term for the same thing.
-  - No idioms, metaphors,n clusters longer thanthree words.
-  - Keep articles and relat", "which"). Do not write telegraphic text.
-  - Technical names (toole always allowed, even ifnot "simple".
-- **Write for a reader wi
+  - No idioms, metaphors, humour, or filler. No noun clusters longer than three words.
+  - Keep articles and relative pronouns ("the", "that", "which"). Do not write telegraphic text.
+  - Technical names (tool, file, command, error) are always allowed, even if not "simple".
+- **Write for a reader with ADHD.**
   - Put the answer in the first sentence. Put the reason after it.
-  - Use short paragraphs  lists. Do not write wallsof text.
-  - **Bold** the key termder can scan.
+  - Use short paragraphs (1–3 sentences) and bullet lists. Do not write walls of text.
+  - **Bold** the key term in each bullet so the reader can scan.
   - Give one action at a time. End with the single next step.
-  - Do not list options te a recommendation.
+  - Do not list options the user does not need. Give a recommendation.
 
-If the two rules conflict*structure** and STE setsthe **words**.                                                               
-## Working Standards                                                         
+If the two rules conflict, the ADHD rule sets the **structure** and STE sets the **words**.
+
+## Working Standards
+
 - **Plan first** for non-trivial work (3+ steps or architectural decisions); if it goes sideways,
   stop and re-plan.
-- **Verify before done** ogs, behavior diff). Nevermark complete on faith.
-- **If it has a UI, open ling it done.** Attachscreenshots. A green test                                                   suite does not see a bl
-- **Root causes, not patches** — senior-developer standards; no temporary hacks. Prefer the elegant
-- **Minimal, simple changes** — touch only what's necessary.                   - **Autonomous bug fixingfailing test, just fix it.
+- **Verify before done** — prove it works (tests, logs, behavior diff). Never mark complete on faith.
+- **If it has a UI, open it in a browser before calling it done.** Attach screenshots. A green test
+  suite does not see a blank page.
+- **Root causes, not patches** — senior-developer standards; no temporary hacks. Prefer the elegant fix.
+- **Minimal, simple changes** — touch only what's necessary.
+- **Autonomous bug fixing** — given a bug, log, or failing test, just fix it.
 - **Quality gates** — before "done", remove dead code and unused imports, then run lint and typecheck
   on the modified packages.
-- **Capture lessons** — athe pattern so it does notrecur.
+- **Capture lessons** — after a correction, record the pattern so it does not recur.
 
 ## Subagents
 
 Default to subagents — do not do everything in the main context.
-- Use them for explorationdent edits, andverification.
-- Run independent work ink per subagent.
+- Use them for exploration, research, tests, independent edits, and verification.
+- Run independent work in parallel; one focused task per subagent.
 - Use `subagent_type=Explore` for broad codebase search.
 
 ## Committing
 
 - Commit after a task is done; ask first if it was debugging or investigation.
-- Conventional commits: `. `feat(auth): …`,`fix(api): …`).
-- **No AI attribution** — Claude Code","Co-Authored-By: Claude", 🤖
-  footers, or any AI signs, or PR comments. Appliesto subagents too.
+- Conventional commits: `type(scope): subject` (e.g. `feat(auth): …`, `fix(api): …`).
+- **No AI attribution** — never add "Generated with Claude Code", "Co-Authored-By: Claude", 🤖
+  footers, or any AI signature to commits, PR bodies, or PR comments. Applies to subagents too.
 
 ## Pull Requests
 
-- **Only report a PR as ready once its checks pass.** After pushing, poll `gh
-pr checks <pr>` until
-  CI completes. Never say "ready to merge" while checks are pending or
-failing.
+- **Only report a PR as ready once its checks pass.** After pushing, poll `gh pr checks <pr>` until
+  CI completes. Never say "ready to merge" while checks are pending or failing.
 
 ## Python Tooling
 
-- **Always use uv** — nevipenv. `uv sync` toinstall, `uv add/remove` for
-  deps, `uv run <cmd>` to, git-ignore `.venv/`.
+- **Always use uv** — never pip, venv, poetry, or pipenv. `uv sync` to install, `uv add/remove` for
+  deps, `uv run <cmd>` to execute. Commit `uv.lock`, git-ignore `.venv/`.
 
 ## Core Principles
 
-- **Simplicity first** —
+- **Simplicity first** — minimal code impact.
 - **No laziness** — find root causes, no temporary fixes.
-- **Minimal impact** — on; avoid introducing bugs.
+- **Minimal impact** — only touch what is necessary; avoid introducing bugs.
