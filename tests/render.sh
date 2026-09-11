@@ -113,8 +113,26 @@ if [ "$legacy" != "legacy-name" ]; then
     ok "an unkeyed pending file is never promoted"
 else bad "an unkeyed pending file is never promoted" "B's name file holds '${legacy}'"; fi
 
+# The stale sweep runs on every draw, from whichever session happens to draw, so
+# it must not eat a pending name another session has not promoted yet. Promotion
+# normally lands on the next draw, within a second; a pending file that has
+# survived an hour belongs to a session that is gone.
+SID_C="cccccccc-0000-4000-8000-00000000000c"
+pending_c="${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_C}.name"
+printf 'name-C' > "$pending_c"
+render "${WORK}/status-b.json" >/dev/null
+if [ -f "$pending_c" ]; then
+    ok "another session's fresh pending name survives a draw"
+else bad "another session's fresh pending name survives a draw"; fi
+
+touch -t 200001010000 "$pending_c"
+render "${WORK}/status-b.json" >/dev/null
+if [ ! -f "$pending_c" ]; then
+    ok "an abandoned pending name is swept"
+else bad "an abandoned pending name is swept"; fi
+
 # Leave no state behind: section 5 depends on section 2's promoted name file.
-rm -f "$path_a" "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_A}.name" \
+rm -f "$pending_c" "$path_a" "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_A}.name" \
       "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" \
       "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_B}.name" \
       "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"

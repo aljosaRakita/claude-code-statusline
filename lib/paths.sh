@@ -38,7 +38,10 @@ cc_ensure_state_dir() {
 }
 
 # Name of the file holding the current session name, given a session id.
+# Refuses an empty id for the same reason cc_pending_name_file does: an empty one
+# keys every session to the single path "claude-session-.name".
 cc_session_name_file() {
+    [ -n "${1:-}" ] || return 1
     cc_state_file "claude-session-$1.name"
 }
 

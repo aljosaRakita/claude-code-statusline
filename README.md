@@ -110,9 +110,13 @@ fresh, so nothing hands the path over on demand. A path remembered from an *earl
 wrong path.
 
 Two sessions that ran at once used to share one `claude-session-pending.name`, and whichever
-renderer drew first promoted the name, whoever wrote it. An upgrade therefore ages out any leftover
-unkeyed file rather than promoting it: a name pending at the moment of upgrade is dropped, and the
-hook asks for it again on the next prompt.
+renderer drew first promoted the name, whoever wrote it. A leftover unkeyed file is therefore never
+promoted, only aged out: a name pending when you upgrade is dropped, and the hook asks for it again
+on the next prompt.
+
+**Every draw also sweeps pending files older than an hour**, from every session, not just its own.
+Promotion normally happens on the next draw a second later, so an hour-old pending file belongs to
+a session that is gone. Nothing sweeps a promoted `claude-session-<id>.name`.
 
 The hook runs on every prompt. It asks Claude to set a name when none exists, and to reconsider
 one older than 10 minutes. Both messages name the path. It stays quiet when a name is already
