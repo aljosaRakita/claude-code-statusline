@@ -17,7 +17,7 @@ session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -z "$session_id" ] && exit 0
 
 name_file=$(cc_session_name_file "$session_id")
-pending_file=$(cc_pending_name_file)
+pending_file=$(cc_pending_name_file "$session_id")
 
 # A pending name is already waiting for the next draw. Do not nag again.
 [ -f "$pending_file" ] && exit 0
@@ -29,7 +29,9 @@ fi
 
 if [ -n "$(find "$name_file" -mmin "+${STALE_MINUTES}" 2>/dev/null)" ]; then
     current=$(cat "$name_file" 2>/dev/null)
-    echo "Session name \"${current}\" was set >${STALE_MINUTES}m ago. Update it if the focus has shifted."
+    # Name the path here too. The path carries the session id, so a remembered one
+    # from an earlier session is a wrong one.
+    echo "Session name \"${current}\" was set >${STALE_MINUTES}m ago. If the focus has shifted, write a new one to ${pending_file}."
 fi
 
 exit 0

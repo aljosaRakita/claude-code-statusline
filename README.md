@@ -98,16 +98,18 @@ Claude names its own sessions, and the mechanism is worth understanding before y
 **Claude cannot see its own session id.** So it cannot write
 `claude-session-<id>.name` directly. Instead:
 
-1. Claude writes the name to `claude-session-pending.name` in the state directory.
-2. On its next draw, the status line **promotes** that file to `claude-session-<session_id>.name`
-   and writes the id back to `claude-session-id`.
-3. Later updates can go straight to the real file.
+1. The `session-name-check.sh` hook prints the path to write to:
+   `claude-session-pending-<session_id>.name`, in the state directory.
+2. Claude writes the name there.
+3. On its next draw, the status line **promotes** that file to
+   `claude-session-<session_id>.name`.
 
-When `CLAUDE_CODE_SSE_PORT` is set, the pending and id files are keyed by that port, so two live
-sessions cannot pick up each other's names.
+**The pending path carries the session id, so never reuse a remembered one.** Take it from the
+hook every time. Two sessions that ran at once used to share one `claude-session-pending.name`,
+and whichever renderer drew first promoted the name, whoever wrote it.
 
-The `session-name-check.sh` hook runs on every prompt. It asks Claude to set a name when none
-exists, and to reconsider one older than 10 minutes. It stays quiet when a name is already
+The hook runs on every prompt. It asks Claude to set a name when none exists, and to reconsider
+one older than 10 minutes. Both messages name the path. It stays quiet when a name is already
 pending.
 
 If no name file exists, the status line falls back to the session summary in

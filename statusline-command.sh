@@ -44,17 +44,21 @@ session_name=""
 name_file=$(cc_session_name_file "$session_id")
 
 # Promote a pending name written by Claude, which cannot see the session id.
-pending_file=$(cc_pending_name_file)
-if [ -f "$pending_file" ] && [ -n "$session_id" ]; then
-    mv "$pending_file" "$name_file" 2>/dev/null || true
+# The path is computed inside this guard on purpose: an empty session id would
+# otherwise key every session to one shared file again.
+if [ -n "$session_id" ]; then
+    pending_file=$(cc_pending_name_file "$session_id")
+    [ -f "$pending_file" ] && mv "$pending_file" "$name_file" 2>/dev/null
 fi
 
-# Hand the session id back so later updates can skip the pending file.
-[ -n "$session_id" ] && printf '%s' "$session_id" > "$(cc_session_id_file)" 2>/dev/null
-
-# Drop pending and id files left behind by sessions that ended over an hour ago.
+# Drop pending files left behind by sessions that ended over an hour ago.
 find "$(cc_state_dir)" -maxdepth 1 -name 'claude-session-pending-*.name' -mmin +60 -delete 2>/dev/null
-find "$(cc_state_dir)" -maxdepth 1 -name 'claude-session-id-*' -mmin +60 -delete 2>/dev/null
+
+# Sweep the unkeyed files the port-keyed scheme wrote. Nothing reads or promotes
+# them now, and the glob above cannot match them -- it requires the dash.
+find "$(cc_state_dir)" -maxdepth 1 \
+    \( -name 'claude-session-pending.name' -o -name 'claude-session-id' -o -name 'claude-session-id-*' \) \
+    -delete 2>/dev/null
 
 [ -f "$name_file" ] && session_name=$(cat "$name_file" 2>/dev/null)
 

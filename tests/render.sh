@@ -58,18 +58,15 @@ else bad "output is valid UTF-8" "$out"; fi
 echo
 echo "== 2. a pending session name is promoted and shown =="
 mkdir -p "$CC_STATUSLINE_STATE_DIR"
-printf 'Packaging Run' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+printf 'Packaging Run' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name"
 out=$(render)
 if has "Packaging Run" "$out"; then ok "pending name reaches the status bar"; else bad "pending name reaches the status bar" "$out"; fi
-if [ ! -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name" ]; then
+if [ ! -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name" ]; then
     ok "pending file consumed"
 else bad "pending file consumed"; fi
 if [ -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name" ]; then
     ok "promoted to claude-session-<id>.name"
 else bad "promoted to claude-session-<id>.name"; fi
-if [ "$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-id" 2>/dev/null)" = "$SESSION_ID" ]; then
-    ok "session id written back for direct updates"
-else bad "session id written back for direct updates"; fi
 
 echo
 echo "== 2b. two live sessions cannot steal each other's name =="
@@ -140,10 +137,10 @@ if [ -z "$out" ]; then ok "silent while the name is fresh"; else bad "silent whi
 rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
 out=$(printf '%s' "$hook_in" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
 if has "No session name set" "$out"; then ok "nags when no name exists"; else bad "nags when no name exists" "$out"; fi
-printf 'Later' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+printf 'Later' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name"
 out=$(printf '%s' "$hook_in" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
 if [ -z "$out" ]; then ok "silent when a name is already pending"; else bad "silent when a name is already pending" "$out"; fi
-rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name"
 
 echo
 echo "== 6. install is idempotent and does not destroy settings =="
