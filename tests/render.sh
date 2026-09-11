@@ -72,6 +72,44 @@ if [ "$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-id" 2>/dev/null)" = "$SES
 else bad "session id written back for direct updates"; fi
 
 echo
+echo "== 2b. two live sessions cannot steal each other's name =="
+# The pending file carries a name Claude chose before it can know its own session
+# id. If that file is not keyed per session, whichever renderer draws first
+# promotes it -- so session B ends up wearing session A's name. Both assertions
+# below fail while the pending path is shared.
+#
+# Deliberately asymmetric: A writes, B draws. A symmetric script cannot run at
+# all on the broken code, because A's unpromoted pending file suppresses B's
+# nudge, so B never learns a path to write to.
+SID_A="aaaaaaaa-0000-4000-8000-00000000000a"
+SID_B="bbbbbbbb-0000-4000-8000-00000000000b"
+prompt_for() { jq -n --arg s "$1" '{session_id:$s, hook_event_name:"UserPromptSubmit"}'; }
+
+nudge_a=$(prompt_for "$SID_A" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
+path_a=$(printf '%s' "$nudge_a" | sed -n 's/.*Write one to \(.*\) reflecting.*/\1/p')
+if [ -n "$path_a" ]; then ok "session A is told where to write"; else bad "session A is told where to write" "$nudge_a"; fi
+printf 'name-A' > "$path_a"
+
+# Checked before B renders: once B has promoted a name, a silent nudge would be
+# correct, and the assertion would pass for the wrong reason.
+nudge_b=$(prompt_for "$SID_B" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
+if has "No session name set" "$nudge_b"; then
+    ok "session B is still nudged while A's name is pending"
+else bad "session B is still nudged while A's name is pending" "got: '${nudge_b}'"; fi
+
+jq --arg s "$SID_B" '.session_id = $s' "$FIXTURE" > "${WORK}/status-b.json"
+render "${WORK}/status-b.json" >/dev/null
+stolen=$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" 2>/dev/null)
+if [ "$stolen" != "name-A" ]; then
+    ok "session B did not steal session A's name"
+else bad "session B did not steal session A's name" "B's name file holds '${stolen}'"; fi
+
+# Leave no state behind: section 5 depends on section 2's promoted name file.
+rm -f "$path_a" "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_A}.name" \
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" \
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_B}.name"
+
+echo
 echo "== 3. the clock the hook writes is the clock the renderer reads =="
 printf '{"hook_event_name":"PostToolUse"}' | bash "${ROOT}/hooks/record-activity.sh" > "${WORK}/post.out" 2>/dev/null
 stamp=$(cat "${CC_STATUSLINE_STATE_DIR}/claude-last-activity.txt" 2>/dev/null)
