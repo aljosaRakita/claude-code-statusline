@@ -51,13 +51,19 @@ if [ -n "$session_id" ]; then
     [ -f "$pending_file" ] && mv "$pending_file" "$name_file" 2>/dev/null
 fi
 
-# Drop pending files left behind by sessions that ended over an hour ago.
-find "$(cc_state_dir)" -maxdepth 1 -name 'claude-session-pending-*.name' -mmin +60 -delete 2>/dev/null
-
-# Sweep the unkeyed files the port-keyed scheme wrote. Nothing reads or promotes
-# them now, and the glob above cannot match them -- it requires the dash.
-find "$(cc_state_dir)" -maxdepth 1 \
-    \( -name 'claude-session-pending.name' -o -name 'claude-session-id' -o -name 'claude-session-id-*' \) \
+# Drop files left behind by sessions that ended over an hour ago: the keyed
+# pending names, plus the unkeyed pending and id files the port-keyed scheme
+# wrote. An unkeyed pending file is aged out, never promoted -- promoting it
+# would hand one session another session's name, which is the bug this keying
+# exists to remove.
+#
+# `! -name '*.name'` keeps the id pattern off a name file whose session id
+# happens to begin "id-". No real session id does, since they are UUIDs, but the
+# pattern should not depend on that.
+find "$(cc_state_dir)" -maxdepth 1 -mmin +60 \
+    \( -name 'claude-session-pending-*.name' \
+       -o -name 'claude-session-pending.name' \
+       -o \( -name 'claude-session-id*' ! -name '*.name' \) \) \
     -delete 2>/dev/null
 
 [ -f "$name_file" ] && session_name=$(cat "$name_file" 2>/dev/null)

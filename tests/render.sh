@@ -87,8 +87,11 @@ path_a=$(printf '%s' "$nudge_a" | sed -n 's/.*Write one to \(.*\) reflecting.*/\
 if [ -n "$path_a" ]; then ok "session A is told where to write"; else bad "session A is told where to write" "$nudge_a"; fi
 printf 'name-A' > "$path_a"
 
-# Checked before B renders: once B has promoted a name, a silent nudge would be
-# correct, and the assertion would pass for the wrong reason.
+# Checked before B renders, so the assertion reads against the state the symptom
+# actually occurs in: A's name still pending, B's still absent. Either order
+# detects the bug -- reversing it does not make the test pass on broken code --
+# but reversed it would be asserting about a session that has already been given
+# a name, which is a different claim.
 nudge_b=$(prompt_for "$SID_B" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
 if has "No session name set" "$nudge_b"; then
     ok "session B is still nudged while A's name is pending"
@@ -101,10 +104,20 @@ if [ "$stolen" != "name-A" ]; then
     ok "session B did not steal session A's name"
 else bad "session B did not steal session A's name" "B's name file holds '${stolen}'"; fi
 
+# An upgrade leaves an unkeyed pending file behind. Promoting it would hand this
+# session whatever the other one wrote -- the same steal, one last time.
+printf 'legacy-name' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+render "${WORK}/status-b.json" >/dev/null
+legacy=$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" 2>/dev/null)
+if [ "$legacy" != "legacy-name" ]; then
+    ok "an unkeyed pending file is never promoted"
+else bad "an unkeyed pending file is never promoted" "B's name file holds '${legacy}'"; fi
+
 # Leave no state behind: section 5 depends on section 2's promoted name file.
 rm -f "$path_a" "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_A}.name" \
       "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" \
-      "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_B}.name"
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_B}.name" \
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
 
 echo
 echo "== 3. the clock the hook writes is the clock the renderer reads =="

@@ -104,9 +104,15 @@ Claude names its own sessions, and the mechanism is worth understanding before y
 3. On its next draw, the status line **promotes** that file to
    `claude-session-<session_id>.name`.
 
-**The pending path carries the session id, so never reuse a remembered one.** Take it from the
-hook every time. Two sessions that ran at once used to share one `claude-session-pending.name`,
-and whichever renderer drew first promoted the name, whoever wrote it.
+**The pending path carries the session id, so never carry one across sessions.** Within a session
+the path is stable, and reusing it is how a rename works — the hook is quiet while a name is
+fresh, so nothing hands the path over on demand. A path remembered from an *earlier* session is a
+wrong path.
+
+Two sessions that ran at once used to share one `claude-session-pending.name`, and whichever
+renderer drew first promoted the name, whoever wrote it. An upgrade therefore ages out any leftover
+unkeyed file rather than promoting it: a name pending at the moment of upgrade is dropped, and the
+hook asks for it again on the next prompt.
 
 The hook runs on every prompt. It asks Claude to set a name when none exists, and to reconsider
 one older than 10 minutes. Both messages name the path. It stays quiet when a name is already
