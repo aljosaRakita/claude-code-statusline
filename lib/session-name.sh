@@ -55,6 +55,7 @@ cc_session_name() {
             | if type == "string" then select(length > 0)
               elif type == "array" then (map(select(.type == "text") | .text | strings | select(length > 0)) | first // empty)
               else empty end
+            | gsub("^\\s+"; "") | select(length > 0)
             | select(startswith("<") | not)
         ' 2>/dev/null | head -n1)
     fi

@@ -447,6 +447,14 @@ printf '%s\n' "$long" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}
 run_hook "$(payload Stop)" >/dev/null
 t=$(tail -n1 "$STUB_LOG"); tlen=$(printf '%s' "$t" | jq -R -r 'length')
 if [ "$tlen" = "80" ]; then ok "an oversized name is cut, not dropped"; else bad "an oversized name is cut, not dropped" "len=${tlen}"; fi
+
+# A name cut exactly after a word boundary must not keep the space the cut
+# leaves at the end: 79 a's, a space, then a word the cut drops.
+cut=""; for _ in $(seq 1 79); do cut="${cut}a"; done
+printf '%s zzz\n' "$cut" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+run_hook "$(payload Stop)" >/dev/null
+t=$(tail -n1 "$STUB_LOG"); tlen=$(printf '%s' "$t" | jq -R -r 'length')
+if [ "$tlen" = "79" ] && [ "${t%a}" != "$t" ]; then ok "a cut title never ends in a space"; else bad "a cut title never ends in a space" "len=${tlen} t=${t}"; fi
 printf '%s\n' "$NAME" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
 
 run_hook "$(payload PreToolUse '{"agent_id":"sub-1","tool_name":"Bash","tool_input":{"command":"true"}}')" >/dev/null
@@ -510,6 +518,13 @@ if [ "$(argv)" = "${PREFIX_ARGV}--title|Fix the login bug|" ]; then ok "falls ba
 printf '{"type":"user","message":{"content":[{"type":"text","text":""},{"type":"text","text":"Second block wins"}]}}\n' > "${WORK}/proj/${SESSION_ID}.jsonl"
 run_hook "$(payload Stop "{\"transcript_path\":\"${WORK}/proj/${SESSION_ID}.jsonl\"}")" >/dev/null
 if [ "$(argv)" = "${PREFIX_ARGV}--title|Second block wins|" ]; then ok "an empty text block does not hide the next one"; else bad "an empty text block does not hide the next one" "$(argv)"; fi
+
+# A prompt that starts with newlines must not blank the fallback: head -n1 of
+# the raw value would return the empty first line. The newlines are built by
+# jq, so this file carries no escape for them.
+jq -n -c '{type:"user", message:{content:(([10,10] | implode) + "Leading newline prompt")}}' > "${WORK}/proj/${SESSION_ID}.jsonl"
+run_hook "$(payload Stop "{\"transcript_path\":\"${WORK}/proj/${SESSION_ID}.jsonl\"}")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|Leading newline prompt|" ]; then ok "a prompt that starts with whitespace still names the pane"; else bad "a prompt that starts with whitespace still names the pane" "$(argv)"; fi
 printf '%s\n' "$NAME" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
 
 # Regression: empty fields between filled ones. A tab-joined parse collapsed

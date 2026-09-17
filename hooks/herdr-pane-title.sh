@@ -84,7 +84,8 @@ report() {
 # One line, no escapes, no control or format characters, at most 80 code
 # points. \e is ESC, \p{Cc} is every C0 and C1 control, \p{Cf} is every format
 # character (bidi overrides, zero-width joiners), so this file carries no raw
-# bytes. jq slices by code point, so a multi-byte name is never cut in half.
+# bytes. jq slices by code point, so a multi-byte name is never cut in half,
+# and a space the cut leaves at the end is trimmed again.
 normalize() {
     printf '%s' "$1" | jq -R -s -r '
         gsub("\\e\\[[0-9;?]*[ -/]*[@-~]"; "")
@@ -92,6 +93,7 @@ normalize() {
         | gsub("\\p{Cc}+"; " ")
         | gsub("^ +| +$"; "")
         | .[0:80]
+        | gsub(" +$"; "")
     ' 2>/dev/null
 }
 

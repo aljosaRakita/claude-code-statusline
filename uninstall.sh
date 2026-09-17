@@ -32,6 +32,11 @@ esac
 
 if [ -f "$SETTINGS" ]; then
     cleaned=$(jq --arg p "$PREFIX" --arg pc "$PREFIX_CMD" '
+        # Every hook command that points under the prefix directory is treated
+        # as owned by the installer, because the prefix is the package directory
+        # (default ~/.claude/statusline/). A foreign hook that merely references
+        # a path under it is stripped too. To keep such a hook, install with a
+        # dedicated --prefix so the two directories no longer overlap.
         def strip:
             map(if (.hooks | type) == "array" then .hooks |= map(select(
                 (((.command // "") | contains($p + "/")) or ((.command // "") | contains($pc + "/"))) | not

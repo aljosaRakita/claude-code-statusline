@@ -54,7 +54,7 @@ if [ -f "$SETTINGS" ]; then
     legacy=$(jq -r --arg p "$PREFIX" --arg pc "$PREFIX_CMD" '
         [ (.statusLine.command // empty) ]
         + [ (.hooks // {}) | to_entries[] | .value[]? | .hooks[]? | (.command // empty) ]
-        | map(select(test("statusline-command\\.sh|session-name-check\\.sh|update-terminal-title\\.sh|record-activity\\.sh")))
+        | map(select(test("statusline-command\\.sh|session-name-check\\.sh|update-terminal-title\\.sh|record-activity\\.sh|notify\\.sh|herdr-pane-title\\.sh")))
         | map(select((contains($p + "/") or contains($pc + "/")) | not)) | unique | .[]
     ' "$SETTINGS" 2>/dev/null || true)
     if [ -n "$legacy" ]; then
@@ -83,6 +83,11 @@ build_settings() {
         --arg p "$PREFIX" --arg pc "$PREFIX_CMD" --arg sl "$sl_cmd" --arg ra "$ra_cmd" \
         --arg tt "$tt_cmd" --arg sn "$sn_cmd" --arg nt "$nt_cmd" --arg hp "$hp_cmd" \
         --argjson notify "$WITH_NOTIFICATIONS" --argjson herdr "$WITH_HERDR" '
+        # Every hook command that points under the prefix directory is treated
+        # as owned by the installer, because the prefix is the package directory
+        # (default ~/.claude/statusline/). A foreign hook that merely references
+        # a path under it is stripped too. To keep such a hook, install with a
+        # dedicated --prefix so the two directories no longer overlap.
         def strip:
             map(if (.hooks | type) == "array" then .hooks |= map(select(
                 (((.command // "") | contains($p + "/")) or ((.command // "") | contains($pc + "/"))) | not
