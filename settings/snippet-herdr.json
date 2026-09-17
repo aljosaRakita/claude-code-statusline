@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear|compact",
+        "hooks": [ { "type": "command", "command": "bash ~/.claude/statusline/hooks/herdr-pane-title.sh", "timeout": 5 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "bash ~/.claude/statusline/hooks/herdr-pane-title.sh", "timeout": 5 } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "bash ~/.claude/statusline/hooks/herdr-pane-title.sh", "timeout": 5 } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "bash ~/.claude/statusline/hooks/herdr-pane-title.sh", "timeout": 5 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "bash ~/.claude/statusline/hooks/herdr-pane-title.sh", "timeout": 5 } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "bash ~/.claude/statusline/hooks/herdr-pane-title.sh", "timeout": 5 } ] }
+    ]
+  }
+}
