@@ -9,7 +9,8 @@
 #
 #   SessionStart     -> "<name>", or the title cleared when there is no name
 #   UserPromptSubmit -> "<name> · thinking"
-#   PreToolUse       -> "<name> · editing install.sh"
+#   PreToolUse       -> "<name> · editing install.sh", or "<name>" when the
+#                       activity normalizes to nothing
 #   PostToolUse      -> "<name> · thinking"
 #   Stop             -> "<name>"
 #   SessionEnd       -> title cleared
@@ -124,10 +125,14 @@ activity() {
     esac
 }
 
+# The activity is normalized on its own first: one that is nothing but escapes
+# or control characters would otherwise leave "<name> ·" behind.
 case "$event" in
     SessionStart|Stop)            title="$name" ;;
     UserPromptSubmit|PostToolUse) title="${name} · thinking" ;;
-    PreToolUse)                   title="${name} · $(activity)" ;;
+    PreToolUse)
+        act=$(normalize "$(activity)")
+        title="$name"; [ -n "$act" ] && title="${name} · ${act}" ;;
     *)                            exit 0 ;;
 esac
 

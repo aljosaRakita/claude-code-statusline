@@ -248,9 +248,15 @@ if [ "$(jq -r '.model' "$FAKE_SETTINGS")" = "opus" ]; then ok "unrelated setting
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
     ok "pre-existing hook preserved"
 else bad "pre-existing hook preserved"; fi
+# A hook group with a matcher but no hooks array is valid settings. The
+# installer and the uninstaller must step over it, not abort on it.
+jq '.hooks.PreCompact = [ { matcher: "x" } ]' "$FAKE_SETTINGS" > "${WORK}/install/tmp.json" && mv "${WORK}/install/tmp.json" "$FAKE_SETTINGS"
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" --with-herdr >/dev/null 2>&1
 n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "10" ]; then ok "--with-herdr adds six entries, still no duplicates"; else bad "--with-herdr adds six entries, still no duplicates" "got ${n}"; fi
+if [ "$(jq -r '.hooks.PreCompact[0].matcher' "$FAKE_SETTINGS" 2>/dev/null)" = "x" ]; then
+    ok "a hook group without a hooks array is left alone"
+else bad "a hook group without a hooks array is left alone" "$(jq -c '.hooks.PreCompact' "$FAKE_SETTINGS" 2>/dev/null)"; fi
 n=$(jq '[ .hooks[]?[]?.hooks[]? | select((.command // "") | endswith("herdr-pane-title.sh")) | select(.timeout == 5) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "6" ]; then ok "every herdr entry carries a 5s timeout"; else bad "every herdr entry carries a 5s timeout" "got ${n}"; fi
 if jq -e '.hooks.SessionStart[]? | select(.matcher == "startup|resume|clear|compact")' "$FAKE_SETTINGS" >/dev/null; then
@@ -277,6 +283,9 @@ if [ "$n" = "0" ]; then ok "no status line entries remain"; else bad "no status 
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
     ok "pre-existing hook survived uninstall"
 else bad "pre-existing hook survived uninstall"; fi
+if [ "$(jq -r '.hooks.PreCompact[0].matcher' "$FAKE_SETTINGS" 2>/dev/null)" = "x" ]; then
+    ok "a hook group without a hooks array survived uninstall"
+else bad "a hook group without a hooks array survived uninstall" "$(jq -c '.hooks.PreCompact' "$FAKE_SETTINGS" 2>/dev/null)"; fi
 if jq -e '.statusLine == null' "$FAKE_SETTINGS" >/dev/null; then ok "statusLine removed"; else bad "statusLine removed"; fi
 if [ ! -d "$FAKE_PREFIX" ]; then ok "installed files removed"; else bad "installed files removed"; fi
 
@@ -336,6 +345,9 @@ payload() {  # payload <event> [extra JSON object]
 }
 run_hook() {  # run_hook <payload> [env assignments...]; prints "exit=N out=<stdout> err=<stderr>"
     local p="$1"; shift
+    # A payload jq could not build must fail loudly: an empty payload leaves no
+    # argv log, and every "reports nothing" assertion would pass for nothing.
+    [ -n "$p" ] || { printf 'exit=99 out=EMPTY-PAYLOAD err='; return; }
     rm -f "$STUB_LOG"
     local out err rc
     out=$(printf '%s' "$p" | env HERDR_ENV=1 HERDR_PANE_ID="w1:p1" HERDR_BIN_PATH="${STUB_DIR}/herdr" "$@" bash "$HOOK" 2>"${WORK}/hook.err"); rc=$?
@@ -387,6 +399,12 @@ esc=$(awk 'BEGIN{printf "%c", 27}')
 extra=$(jq -n --arg e "$esc" '{tool_name:"Bash", tool_input:{command:"true", description:("line one\nline two" + $e + "[31m red" + $e + "[0m\ttab")}}')
 run_hook "$(payload PreToolUse "$extra")" >/dev/null
 if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · line one line two red tab|" ]; then ok "title is one line without escapes or control characters"; else bad "title is one line without escapes or control characters" "$(argv)"; fi
+
+# A description that is nothing but an ANSI reset must not leave "<name> ·".
+messy=$(jq -n --arg e "$esc" '$e + "[0m"')
+extra=$(jq -n --argjson d "$messy" '{tool_name:"Bash", tool_input:{command:"true", description:$d}}')
+run_hook "$(payload PreToolUse "$extra")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME}|" ]; then ok "an activity that normalizes to nothing leaves the bare name"; else bad "an activity that normalizes to nothing leaves the bare name" "$(argv)"; fi
 
 long=$(printf 'é%.0s' $(seq 1 100))
 extra=$(jq -n --arg d "$long" '{tool_name:"Bash", tool_input:{command:"true", description:$d}}')

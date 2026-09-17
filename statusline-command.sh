@@ -37,7 +37,6 @@ cc_ensure_state_dir
 
 # --- Session name ---
 # Priority: the name file Claude manages, then the sessions index summary, then the first user message. See lib/session-name.sh.
-session_name=""
 name_file=$(cc_session_name_file "$session_id")
 
 # Promote a pending name written by Claude, which cannot see the session id.
