@@ -43,16 +43,17 @@ cc_session_name() {
     fi
 
     if [ -z "$name" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-        # The first 256 KB and the first 50 lines bound the work, whatever the
+        # The first 50 lines, capped at 256 KB, bound the work, whatever the
         # line length; each line is parsed on its own, so a line cut short is
         # dropped by fromjson?, not fatal. Content is a string in old
-        # transcripts and a block array in new ones. Lines that start with "<"
-        # are injected <local-command-...> records, not prompts; the renderer
-        # has always skipped them and the hook must agree with it.
-        name=$(head -c 262144 "$transcript_path" | head -n 50 | jq -R -r '
+        # transcripts and a block array in new ones; an empty text block must
+        # not hide a later one. Lines that start with "<" are injected
+        # <local-command-...> records, not prompts; the renderer has always
+        # skipped them and the hook must agree with it.
+        name=$(head -n 50 "$transcript_path" | head -c 262144 | jq -R -r '
             fromjson? | select(.type == "user") | .message.content
-            | if type == "string" then .
-              elif type == "array" then (map(select(.type == "text") | .text) | first // empty)
+            | if type == "string" then select(length > 0)
+              elif type == "array" then (map(select(.type == "text") | .text | strings | select(length > 0)) | first // empty)
               else empty end
             | select(startswith("<") | not)
         ' 2>/dev/null | head -n1)

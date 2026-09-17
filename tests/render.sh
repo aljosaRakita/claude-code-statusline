@@ -242,28 +242,44 @@ JSON
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
 if jq empty "$FAKE_SETTINGS" 2>/dev/null; then ok "settings.json is still valid JSON"; else bad "settings.json is still valid JSON"; fi
-n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+# Counts match on a path boundary, as the installer does, so a sibling
+# "<prefix>-backup/" entry added below is never counted as ours.
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p + "/")) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "4" ]; then ok "four hook entries after two installs (no duplicates)"; else bad "four hook entries after two installs" "got ${n}"; fi
 if [ "$(jq -r '.model' "$FAKE_SETTINGS")" = "opus" ]; then ok "unrelated settings preserved"; else bad "unrelated settings preserved"; fi
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
     ok "pre-existing hook preserved"
 else bad "pre-existing hook preserved"; fi
 # A hook group with a matcher but no hooks array is valid settings. The
-# installer and the uninstaller must step over it, not abort on it.
-jq '.hooks.PreCompact = [ { matcher: "x" } ]' "$FAKE_SETTINGS" > "${WORK}/install/tmp.json" && mv "${WORK}/install/tmp.json" "$FAKE_SETTINGS"
+# installer and the uninstaller must step over it, not abort on it. An event
+# whose value is not an array must pass through untouched, and an entry under
+# a sibling "<prefix>-backup/" directory is not ours: the prefix must match on
+# a path boundary.
+BACKUP_CMD="bash ${FAKE_PREFIX}-backup/other.sh"
+jq --arg c "$BACKUP_CMD" '
+    .hooks.PreCompact = [ { matcher: "x" } ]
+    | .hooks.Weird = "not-an-array"
+    | .hooks.Stop += [ { hooks: [ { type: "command", command: $c } ] } ]
+' "$FAKE_SETTINGS" > "${WORK}/install/tmp.json" && mv "${WORK}/install/tmp.json" "$FAKE_SETTINGS"
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" --with-herdr >/dev/null 2>&1
-n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
-if [ "$n" = "10" ]; then ok "--with-herdr adds six entries, still no duplicates"; else bad "--with-herdr adds six entries, still no duplicates" "got ${n}"; fi
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p + "/")) ] | length' "$FAKE_SETTINGS")
+if [ "$n" = "11" ]; then ok "--with-herdr adds seven entries, still no duplicates"; else bad "--with-herdr adds seven entries, still no duplicates" "got ${n}"; fi
 if [ "$(jq -r '.hooks.PreCompact[0].matcher' "$FAKE_SETTINGS" 2>/dev/null)" = "x" ]; then
     ok "a hook group without a hooks array is left alone"
 else bad "a hook group without a hooks array is left alone" "$(jq -c '.hooks.PreCompact' "$FAKE_SETTINGS" 2>/dev/null)"; fi
+if [ "$(jq -r '.hooks.Weird' "$FAKE_SETTINGS" 2>/dev/null)" = "not-an-array" ]; then
+    ok "a non-array event value is left alone"
+else bad "a non-array event value is left alone" "$(jq -c '.hooks.Weird' "$FAKE_SETTINGS" 2>/dev/null)"; fi
+if jq -e --arg c "$BACKUP_CMD" '[ .hooks.Stop[]?.hooks[]? | select(.command == $c) ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
+    ok "an entry under <prefix>-backup/ is not stripped"
+else bad "an entry under <prefix>-backup/ is not stripped" "$(jq -c '.hooks.Stop' "$FAKE_SETTINGS" 2>/dev/null)"; fi
 n=$(jq '[ .hooks[]?[]?.hooks[]? | select((.command // "") | endswith("herdr-pane-title.sh")) | select(.timeout == 5) ] | length' "$FAKE_SETTINGS")
-if [ "$n" = "6" ]; then ok "every herdr entry carries a 5s timeout"; else bad "every herdr entry carries a 5s timeout" "got ${n}"; fi
+if [ "$n" = "7" ]; then ok "every herdr entry carries a 5s timeout"; else bad "every herdr entry carries a 5s timeout" "got ${n}"; fi
 if jq -e '.hooks.SessionStart[]? | select(.matcher == "startup|resume|clear|compact")' "$FAKE_SETTINGS" >/dev/null; then
     ok "SessionStart is wired with its matcher"
 else bad "SessionStart is wired with its matcher"; fi
 bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
-n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p + "/")) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "4" ]; then ok "a plain re-install drops the herdr entries again"; else bad "a plain re-install drops the herdr entries again" "got ${n}"; fi
 if ls "${FAKE_SETTINGS}".bak-* >/dev/null 2>&1; then ok "a backup was written"; else bad "a backup was written"; fi
 if [ -x "${FAKE_PREFIX}/statusline-command.sh" ] && [ -f "${FAKE_PREFIX}/lib/paths.sh" ]; then
@@ -278,7 +294,7 @@ if has "Opus 5" "$out"; then ok "installed renderer works from its prefix"; else
 echo
 echo "== 8. uninstall removes exactly its own entries =="
 bash "${ROOT}/uninstall.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
-n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p + "/")) ] | length' "$FAKE_SETTINGS")
 if [ "$n" = "0" ]; then ok "no status line entries remain"; else bad "no status line entries remain" "got ${n}"; fi
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
     ok "pre-existing hook survived uninstall"
@@ -286,6 +302,12 @@ else bad "pre-existing hook survived uninstall"; fi
 if [ "$(jq -r '.hooks.PreCompact[0].matcher' "$FAKE_SETTINGS" 2>/dev/null)" = "x" ]; then
     ok "a hook group without a hooks array survived uninstall"
 else bad "a hook group without a hooks array survived uninstall" "$(jq -c '.hooks.PreCompact' "$FAKE_SETTINGS" 2>/dev/null)"; fi
+if [ "$(jq -r '.hooks.Weird' "$FAKE_SETTINGS" 2>/dev/null)" = "not-an-array" ]; then
+    ok "a non-array event value survived uninstall"
+else bad "a non-array event value survived uninstall" "$(jq -c '.hooks.Weird' "$FAKE_SETTINGS" 2>/dev/null)"; fi
+if jq -e --arg c "$BACKUP_CMD" '[ .hooks.Stop[]?.hooks[]? | select(.command == $c) ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
+    ok "an entry under <prefix>-backup/ survived uninstall"
+else bad "an entry under <prefix>-backup/ survived uninstall" "$(jq -c '.hooks.Stop' "$FAKE_SETTINGS" 2>/dev/null)"; fi
 if jq -e '.statusLine == null' "$FAKE_SETTINGS" >/dev/null; then ok "statusLine removed"; else bad "statusLine removed"; fi
 if [ ! -d "$FAKE_PREFIX" ]; then ok "installed files removed"; else bad "installed files removed"; fi
 
@@ -373,6 +395,12 @@ if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · editing install.sh|" ]; then 
 
 run_hook "$(payload PostToolUse '{"tool_name":"Edit","tool_input":{"file_path":"/x/y/install.sh"},"tool_response":{"ok":true}}')" >/dev/null
 if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · thinking|" ]; then ok "PostToolUse returns to · thinking"; else bad "PostToolUse returns to · thinking" "$(argv)"; fi
+
+run_hook "$(payload PostToolUseFailure '{"tool_name":"Edit","tool_input":{"file_path":"/x/y/install.sh"},"error":"boom"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · thinking|" ]; then ok "PostToolUseFailure returns to · thinking"; else bad "PostToolUseFailure returns to · thinking" "$(argv)"; fi
+
+run_hook "$(payload PreToolUse '{"tool_name":"NotebookRead","tool_input":{"notebook_path":"/x/nb.ipynb"}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · reading nb.ipynb|" ]; then ok "PreToolUse NotebookRead names the notebook"; else bad "PreToolUse NotebookRead names the notebook" "$(argv)"; fi
 
 run_hook "$(payload PreToolUse '{"tool_name":"Bash","tool_input":{"command":"bash tests/render.sh","description":"Run the tests"}}')" >/dev/null
 if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · Run the tests|" ]; then ok "PreToolUse Bash uses the description"; else bad "PreToolUse Bash uses the description" "$(argv)"; fi
@@ -477,6 +505,11 @@ rm -f "${WORK}/proj/sessions-index.json"
 } > "${WORK}/proj/${SESSION_ID}.jsonl"
 run_hook "$(payload Stop "{\"transcript_path\":\"${WORK}/proj/${SESSION_ID}.jsonl\"}")" >/dev/null
 if [ "$(argv)" = "${PREFIX_ARGV}--title|Fix the login bug|" ]; then ok "falls back to the first real user message"; else bad "falls back to the first real user message" "$(argv)"; fi
+
+# An empty first text block must not hide the block after it.
+printf '{"type":"user","message":{"content":[{"type":"text","text":""},{"type":"text","text":"Second block wins"}]}}\n' > "${WORK}/proj/${SESSION_ID}.jsonl"
+run_hook "$(payload Stop "{\"transcript_path\":\"${WORK}/proj/${SESSION_ID}.jsonl\"}")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|Second block wins|" ]; then ok "an empty text block does not hide the next one"; else bad "an empty text block does not hide the next one" "$(argv)"; fi
 printf '%s\n' "$NAME" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
 
 # Regression: empty fields between filled ones. A tab-joined parse collapsed
@@ -496,10 +529,10 @@ run_hook "$(payload SessionStart '{"source":"startup"}')" >/dev/null
 if [ "$(argv)" = "${PREFIX_ARGV}--clear-title|" ]; then ok "a control-only name clears the title on SessionStart"; else bad "a control-only name clears the title on SessionStart" "$(argv)"; fi
 rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
 
-# The six entries leave with uninstall, like every other entry.
+# The seven entries leave with uninstall, like every other entry.
 bash "${ROOT}/uninstall.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
 n=$(jq '[ .hooks[]?[]?.hooks[]? | select((.command // "") | endswith("herdr-pane-title.sh")) ] | length' "$FAKE_SETTINGS")
-if [ "$n" = "0" ]; then ok "uninstall removes all six herdr entries"; else bad "uninstall removes all six herdr entries" "got ${n}"; fi
+if [ "$n" = "0" ]; then ok "uninstall removes all seven herdr entries"; else bad "uninstall removes all seven herdr entries" "got ${n}"; fi
 
 echo
 echo "-------------------------------------------"

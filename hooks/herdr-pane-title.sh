@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Reports the session name as the herdr pane title. Wire it to SessionStart,
-# UserPromptSubmit, PreToolUse, PostToolUse, Stop and SessionEnd.
+# UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop and
+# SessionEnd.
 #
 # herdr (https://herdr.dev) shows a Claude Code pane with the terminal title
 # Claude Code set from the first prompt, which goes stale as the session moves
@@ -12,6 +13,7 @@
 #   PreToolUse       -> "<name> · editing install.sh", or "<name>" when the
 #                       activity normalizes to nothing
 #   PostToolUse      -> "<name> · thinking"
+#   PostToolUseFailure -> "<name> · thinking"
 #   Stop             -> "<name>"
 #   SessionEnd       -> title cleared
 #
@@ -114,7 +116,7 @@ activity() {
     local leaf="${tool_path##*/}"
     case "$tool_name" in
         Edit|Write|MultiEdit|NotebookEdit) printf 'editing %s' "${leaf:-file}" ;;
-        Read)               printf 'reading %s' "${leaf:-file}" ;;
+        Read|NotebookRead)  printf 'reading %s' "${leaf:-file}" ;;
         Bash)               printf '%s' "${tool_desc:-running a command}" ;;
         Grep|Glob)          printf 'searching' ;;
         Agent|Task)         printf 'delegating' ;;
@@ -129,7 +131,7 @@ activity() {
 # or control characters would otherwise leave "<name> ·" behind.
 case "$event" in
     SessionStart|Stop)            title="$name" ;;
-    UserPromptSubmit|PostToolUse) title="${name} · thinking" ;;
+    UserPromptSubmit|PostToolUse|PostToolUseFailure) title="${name} · thinking" ;;
     PreToolUse)
         act=$(normalize "$(activity)")
         title="$name"; [ -n "$act" ] && title="${name} · ${act}" ;;
