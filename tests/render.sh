@@ -248,6 +248,17 @@ if [ "$(jq -r '.model' "$FAKE_SETTINGS")" = "opus" ]; then ok "unrelated setting
 if jq -e '[ .hooks.Stop[]?.hooks[]? | select(.command == "echo pre-existing") ] | length == 1' "$FAKE_SETTINGS" >/dev/null; then
     ok "pre-existing hook preserved"
 else bad "pre-existing hook preserved"; fi
+bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" --with-herdr >/dev/null 2>&1
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+if [ "$n" = "10" ]; then ok "--with-herdr adds six entries, still no duplicates"; else bad "--with-herdr adds six entries, still no duplicates" "got ${n}"; fi
+n=$(jq '[ .hooks[]?[]?.hooks[]? | select((.command // "") | endswith("herdr-pane-title.sh")) | select(.timeout == 5) ] | length' "$FAKE_SETTINGS")
+if [ "$n" = "6" ]; then ok "every herdr entry carries a 5s timeout"; else bad "every herdr entry carries a 5s timeout" "got ${n}"; fi
+if jq -e '.hooks.SessionStart[]? | select(.matcher == "startup|resume|clear|compact")' "$FAKE_SETTINGS" >/dev/null; then
+    ok "SessionStart is wired with its matcher"
+else bad "SessionStart is wired with its matcher"; fi
+bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
+n=$(jq --arg p "$P_MATCH" '[ .hooks[]?[]?.hooks[]? | select((.command // "") | contains($p)) ] | length' "$FAKE_SETTINGS")
+if [ "$n" = "4" ]; then ok "a plain re-install drops the herdr entries again"; else bad "a plain re-install drops the herdr entries again" "got ${n}"; fi
 if ls "${FAKE_SETTINGS}".bak-* >/dev/null 2>&1; then ok "a backup was written"; else bad "a backup was written"; fi
 if [ -x "${FAKE_PREFIX}/statusline-command.sh" ] && [ -f "${FAKE_PREFIX}/lib/paths.sh" ]; then
     ok "files copied and executable"
@@ -292,9 +303,185 @@ else bad "uninstall removes tilde-form entries too" "$(cat "${FAKE_HOME}/.claude
 
 echo
 echo "== 10. every script parses =="
-for f in "${ROOT}/statusline-command.sh" "${ROOT}/lib/paths.sh" "${ROOT}"/hooks/*.sh "${ROOT}/install.sh" "${ROOT}/uninstall.sh"; do
+for f in "${ROOT}/statusline-command.sh" "${ROOT}/lib/paths.sh" "${ROOT}/lib/session-name.sh" "${ROOT}"/hooks/*.sh "${ROOT}/install.sh" "${ROOT}/uninstall.sh"; do
     if bash -n "$f" 2>/dev/null; then ok "parses $(basename "$f")"; else bad "parses $(basename "$f")"; fi
 done
+
+echo
+echo "== 11. the herdr pane title follows the session =="
+# The hook runs from the installed prefix against a stub herdr that records its
+# argv, one per line, and exits as told. The hook must talk to it exactly as
+# herdr documents for user hooks, and must never fail a turn when herdr is
+# absent, slow or broken.
+bash "${ROOT}/install.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" --with-herdr >/dev/null 2>&1
+if [ -x "${FAKE_PREFIX}/hooks/herdr-pane-title.sh" ] && [ -f "${FAKE_PREFIX}/lib/session-name.sh" ]; then
+    ok "installer ships the hook and its lib"
+else bad "installer ships the hook and its lib"; fi
+HOOK="${FAKE_PREFIX}/hooks/herdr-pane-title.sh"
+STUB_DIR="${WORK}/bin"; mkdir -p "$STUB_DIR"
+STUB_LOG="${WORK}/herdr.argv"
+cat > "${STUB_DIR}/herdr" <<STUB
+#!/usr/bin/env bash
+[ -n "\${HERDR_STUB_SLEEP:-}" ] && sleep "\$HERDR_STUB_SLEEP"
+printf '%s\n' "\$@" > "${STUB_LOG}"
+exit "\${HERDR_STUB_EXIT:-0}"
+STUB
+chmod +x "${STUB_DIR}/herdr"
+NAME="Packaging Run"
+printf '%s\n' "$NAME" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+payload() {  # payload <event> [extra JSON object]
+    local extra="${2:-null}"
+    jq -n --arg s "$SESSION_ID" --arg e "$1" --argjson x "$extra" \
+        '{session_id:$s, hook_event_name:$e, cwd:"/x"} + ($x // {})'
+}
+run_hook() {  # run_hook <payload> [env assignments...]; prints "exit=N out=<stdout> err=<stderr>"
+    local p="$1"; shift
+    rm -f "$STUB_LOG"
+    local out err rc
+    out=$(printf '%s' "$p" | env HERDR_ENV=1 HERDR_PANE_ID="w1:p1" HERDR_BIN_PATH="${STUB_DIR}/herdr" "$@" bash "$HOOK" 2>"${WORK}/hook.err"); rc=$?
+    err=$(cat "${WORK}/hook.err")
+    printf 'exit=%s out=%s err=%s' "$rc" "$out" "$err"
+}
+argv() { tr '\n' '|' < "$STUB_LOG" 2>/dev/null; }
+PREFIX_ARGV="pane|report-metadata|w1:p1|--source|user:claude-title|--agent|claude|"
+secs() { date +%s; }
+
+r=$(run_hook "$(payload Stop)")
+if [ "$r" = "exit=0 out= err=" ]; then ok "Stop exits 0, silent on stdout and stderr"; else bad "Stop exits 0, silent on stdout and stderr" "$r"; fi
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME}|" ]; then ok "Stop reports the bare session name"; else bad "Stop reports the bare session name" "$(argv)"; fi
+
+run_hook "$(payload SessionStart '{"source":"startup"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME}|" ]; then ok "SessionStart reports the name"; else bad "SessionStart reports the name" "$(argv)"; fi
+
+run_hook "$(payload UserPromptSubmit '{"prompt":"hi"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · thinking|" ]; then ok "UserPromptSubmit adds · thinking"; else bad "UserPromptSubmit adds · thinking" "$(argv)"; fi
+
+run_hook "$(payload PreToolUse '{"tool_name":"Edit","tool_input":{"file_path":"/x/y/install.sh"}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · editing install.sh|" ]; then ok "PreToolUse Edit names the file"; else bad "PreToolUse Edit names the file" "$(argv)"; fi
+
+run_hook "$(payload PostToolUse '{"tool_name":"Edit","tool_input":{"file_path":"/x/y/install.sh"},"tool_response":{"ok":true}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · thinking|" ]; then ok "PostToolUse returns to · thinking"; else bad "PostToolUse returns to · thinking" "$(argv)"; fi
+
+run_hook "$(payload PreToolUse '{"tool_name":"Bash","tool_input":{"command":"bash tests/render.sh","description":"Run the tests"}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · Run the tests|" ]; then ok "PreToolUse Bash uses the description"; else bad "PreToolUse Bash uses the description" "$(argv)"; fi
+
+run_hook "$(payload PreToolUse '{"tool_name":"Bash","tool_input":{"command":"API_TOKEN=secret make lint"}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · running a command|" ]; then ok "PreToolUse Bash without description never shows the command"; else bad "PreToolUse Bash without description never shows the command" "$(argv)"; fi
+
+run_hook "$(payload PreToolUse '{"tool_name":"mcp__framer__framer_publish","tool_input":{}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · using framer_publish|" ]; then ok "PreToolUse MCP tool keeps the tool part"; else bad "PreToolUse MCP tool keeps the tool part" "$(argv)"; fi
+
+run_hook "$(payload PreToolUse '{"tool_name":"Bash","tool_input":"not an object"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · running a command|" ]; then ok "a wrong-shaped tool_input still yields a title"; else bad "a wrong-shaped tool_input still yields a title" "$(argv)"; fi
+
+run_hook "$(payload Notification '{"message":"x"}')" >/dev/null
+if [ ! -f "$STUB_LOG" ]; then ok "an unwired event reports nothing"; else bad "an unwired event reports nothing" "$(argv)"; fi
+
+run_hook "$(payload SessionEnd '{"reason":"other"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--clear-title|" ]; then ok "SessionEnd clears the title"; else bad "SessionEnd clears the title" "$(argv)"; fi
+
+# ESC built with awk, so this file carries no control-character escape. The
+# extra object is built by jq into a variable: bash 3.2 brace-expands a
+# double-quoted JSON literal with a top-level comma inside "$(...)".
+esc=$(awk 'BEGIN{printf "%c", 27}')
+extra=$(jq -n --arg e "$esc" '{tool_name:"Bash", tool_input:{command:"true", description:("line one\nline two" + $e + "[31m red" + $e + "[0m\ttab")}}')
+run_hook "$(payload PreToolUse "$extra")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · line one line two red tab|" ]; then ok "title is one line without escapes or control characters"; else bad "title is one line without escapes or control characters" "$(argv)"; fi
+
+long=$(printf 'é%.0s' $(seq 1 100))
+extra=$(jq -n --arg d "$long" '{tool_name:"Bash", tool_input:{command:"true", description:$d}}')
+run_hook "$(payload PreToolUse "$extra")" >/dev/null
+t=$(tail -n1 "$STUB_LOG")
+tlen=$(printf '%s' "$t" | jq -R -r 'length')
+if [ "$tlen" = "80" ] && [ "${t#"$NAME"}" != "$t" ] && printf '%s' "$t" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+    ok "title is cut at 80 code points, keeps the name, stays valid UTF-8"
+else bad "title is cut at 80 code points, keeps the name, stays valid UTF-8" "len=${tlen}"; fi
+
+printf '%s\n' "$long" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+run_hook "$(payload Stop)" >/dev/null
+t=$(tail -n1 "$STUB_LOG"); tlen=$(printf '%s' "$t" | jq -R -r 'length')
+if [ "$tlen" = "80" ]; then ok "an oversized name is cut, not dropped"; else bad "an oversized name is cut, not dropped" "len=${tlen}"; fi
+printf '%s\n' "$NAME" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+
+run_hook "$(payload PreToolUse '{"agent_id":"sub-1","tool_name":"Bash","tool_input":{"command":"true"}}')" >/dev/null
+if [ ! -f "$STUB_LOG" ]; then ok "a subagent (agent_id) never touches the pane"; else bad "a subagent (agent_id) never touches the pane" "$(argv)"; fi
+extra=$(jq -n --arg t "/h/.claude/projects/p/${SESSION_ID}/subagents/agent-1.jsonl" '{transcript_path:$t, tool_name:"Bash", tool_input:{command:"true"}}')
+run_hook "$(payload PreToolUse "$extra")" >/dev/null
+if [ ! -f "$STUB_LOG" ]; then ok "a subagent (transcript path) never touches the pane"; else bad "a subagent (transcript path) never touches the pane" "$(argv)"; fi
+run_hook "$(payload Stop "{\"transcript_path\":\"/h/subagents-lab/${SESSION_ID}.jsonl\"}")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME}|" ]; then ok "a project path containing 'subagents' is not a subagent"; else bad "a project path containing 'subagents' is not a subagent" "$(argv)"; fi
+
+rm -f "$STUB_LOG"; t0=$(secs)
+r=$(printf '%s' "$(payload Stop)" | env -u HERDR_ENV -u HERDR_PANE_ID HERDR_BIN_PATH="${STUB_DIR}/herdr" bash "$HOOK" 2>&1; echo "exit=$?")
+if [ "$r" = "exit=0" ] && [ ! -f "$STUB_LOG" ] && [ $(( $(secs) - t0 )) -lt 2 ]; then ok "outside herdr it does nothing, in under 2s"; else bad "outside herdr it does nothing, in under 2s" "$r $(argv)"; fi
+
+rm -f "$STUB_LOG"; t0=$(secs)
+r=$(printf '%s' "$(payload Stop)" | env HERDR_ENV=1 HERDR_PANE_ID="w1:p1" HERDR_BIN_PATH="${WORK}/no-such-herdr" bash "$HOOK" 2>&1; echo "exit=$?")
+if [ "$r" = "exit=0" ] && [ $(( $(secs) - t0 )) -lt 2 ]; then ok "a missing herdr binary exits 0 silently, in under 2s"; else bad "a missing herdr binary exits 0 silently, in under 2s" "$r"; fi
+
+r=$(run_hook "$(payload Stop)" HERDR_SOCKET_PATH="${WORK}/no-such.sock")
+if [ "$r" = "exit=0 out= err=" ] && [ ! -f "$STUB_LOG" ]; then ok "a missing socket file skips the call"; else bad "a missing socket file skips the call" "$r $(argv)"; fi
+
+r=$(run_hook "$(payload Stop)" HERDR_STUB_EXIT=1)
+if [ "$r" = "exit=0 out= err=" ]; then ok "a failing herdr never fails the hook"; else bad "a failing herdr never fails the hook" "$r"; fi
+
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+    t0=$(secs); r=$(run_hook "$(payload Stop)" HERDR_STUB_SLEEP=10)
+    if [ "${r%% *}" = "exit=0" ] && [ $(( $(secs) - t0 )) -lt 5 ]; then ok "a hung herdr is cut off in under 5s"; else bad "a hung herdr is cut off in under 5s" "$r"; fi
+else
+    ok "(skipped: no timeout binary, Claude Code's 5s hook timeout is the only guard here)"
+fi
+
+rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+run_hook "$(payload Stop)" >/dev/null
+if [ ! -f "$STUB_LOG" ]; then ok "no name, no report on Stop"; else bad "no name, no report on Stop" "$(argv)"; fi
+run_hook "$(payload SessionStart '{"source":"resume"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--clear-title|" ]; then ok "no name on SessionStart clears a stale title"; else bad "no name on SessionStart clears a stale title" "$(argv)"; fi
+
+# The pending file is the renderer's business. The hook must not read it.
+printf 'Someone Else' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+run_hook "$(payload Stop)" >/dev/null
+if [ ! -f "$STUB_LOG" ]; then ok "the hook ignores the pending name file"; else bad "the hook ignores the pending name file" "$(argv)"; fi
+rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+
+# Fallback 2: sessions-index.json next to the transcript.
+mkdir -p "${WORK}/proj"; : > "${WORK}/proj/${SESSION_ID}.jsonl"
+jq -n --arg s "$SESSION_ID" '{entries:[{sessionId:$s, summary:"From the index"}]}' > "${WORK}/proj/sessions-index.json"
+run_hook "$(payload Stop "{\"transcript_path\":\"${WORK}/proj/${SESSION_ID}.jsonl\"}")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|From the index|" ]; then ok "falls back to the sessions-index summary"; else bad "falls back to the sessions-index summary" "$(argv)"; fi
+
+# Fallback 3: the first user message, in block-array form, after an injected line and before a cut last line.
+rm -f "${WORK}/proj/sessions-index.json"
+{
+    printf '{"type":"user","message":{"content":"<local-command-stdout>x</local-command-stdout>"}}\n'
+    printf '{"type":"user","message":{"content":[{"type":"text","text":"Fix the login bug"}]}}\n'
+    printf '{"type":"user","message":{"content":"never reached'
+} > "${WORK}/proj/${SESSION_ID}.jsonl"
+run_hook "$(payload Stop "{\"transcript_path\":\"${WORK}/proj/${SESSION_ID}.jsonl\"}")" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|Fix the login bug|" ]; then ok "falls back to the first real user message"; else bad "falls back to the first real user message" "$(argv)"; fi
+printf '%s\n' "$NAME" > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+
+# Regression: empty fields between filled ones. A tab-joined parse collapsed
+# them, so an empty agent_id swallowed tool_name and every tool call looked
+# like a subagent. Here agent_id, tool_path and transcript_path are all empty.
+run_hook "$(payload PreToolUse '{"tool_name":"Bash","tool_input":{"command":"true","description":"Empty fields kept"}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · Empty fields kept|" ]; then ok "empty payload fields do not shift the others"; else bad "empty payload fields do not shift the others" "$(argv)"; fi
+
+# A bidi override (U+202E) built with jq, so this file carries no escape for it.
+bidi=$(jq -n '[8238] | implode')
+run_hook "$(jq -n --arg s "$SESSION_ID" --argjson b "$bidi" '{session_id:$s, hook_event_name:"PreToolUse", cwd:"/x", tool_name:"Bash", tool_input:{command:"true", description:("safe " + $b + "efas")}}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--title|${NAME} · safe efas|" ]; then ok "format characters such as a bidi override are dropped"; else bad "format characters such as a bidi override are dropped" "$(argv)"; fi
+
+# A name file that holds only control characters is no name at all.
+awk 'BEGIN{printf "%c%c\n", 1, 2}' > "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+run_hook "$(payload SessionStart '{"source":"startup"}')" >/dev/null
+if [ "$(argv)" = "${PREFIX_ARGV}--clear-title|" ]; then ok "a control-only name clears the title on SessionStart"; else bad "a control-only name clears the title on SessionStart" "$(argv)"; fi
+rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
+
+# The six entries leave with uninstall, like every other entry.
+bash "${ROOT}/uninstall.sh" --prefix "$FAKE_PREFIX" --settings "$FAKE_SETTINGS" >/dev/null 2>&1
+n=$(jq '[ .hooks[]?[]?.hooks[]? | select((.command // "") | endswith("herdr-pane-title.sh")) ] | length' "$FAKE_SETTINGS")
+if [ "$n" = "0" ]; then ok "uninstall removes all six herdr entries"; else bad "uninstall removes all six herdr entries" "got ${n}"; fi
 
 echo
 echo "-------------------------------------------"
