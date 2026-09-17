@@ -69,6 +69,7 @@ Options:
 ```bash
 ./install.sh --dry-run              # print the merged settings, change nothing
 ./install.sh --with-notifications   # also enable desktop notifications
+./install.sh --with-herdr           # also name herdr panes after the session
 ./install.sh --prefix ~/somewhere   # install elsewhere
 ./install.sh --settings /path/to/settings.json
 ```
@@ -122,6 +123,42 @@ pending.
 If no name file exists, the status line falls back to the session summary in
 `sessions-index.json`, then to the first user message in the transcript.
 
+## herdr pane titles
+
+Off by default. Enable with `./install.sh --with-herdr`. For a manual install, append the
+entries in [`settings/snippet-herdr.json`](settings/snippet-herdr.json) to the matching arrays
+in your `settings.json`; do not replace the arrays.
+
+[herdr](https://herdr.dev) is a terminal multiplexer for coding agents. It shows each Claude
+Code pane with the terminal title Claude Code set from the first prompt, which goes stale as
+the session moves on. With this hook the pane title follows the session name instead, and
+shows what the tool call is doing while it runs:
+
+| Event | Pane title |
+| --- | --- |
+| Session start | `Packaging Run` |
+| Prompt submitted | `Packaging Run · thinking` |
+| Tool call starts | `Packaging Run · editing install.sh` |
+| Tool call ends | `Packaging Run · thinking` |
+| Turn finished | `Packaging Run` |
+| Session ended | cleared |
+
+The hook calls `herdr pane report-metadata`, the display-only API herdr documents for user
+hooks that run beside its own Claude integration. Lifecycle state and session restore stay
+with the integration. Outside herdr, for subagents, or when herdr fails, the hook exits
+silently. Each entry carries a 5-second timeout, and the hook adds its own 3-second limit
+where a `timeout` binary exists; a herdr server that hangs while its socket file still exists
+can cost up to 5 seconds per event on a system without one.
+
+The name comes from the promoted name file, then the `sessions-index.json` summary, then the
+first user message, the same chain the status line uses. Titles are one line, stripped of
+control characters, and cut at 80 characters, herdr's own cap; a very long name leaves no room
+for the activity.
+
+What reaches herdr: the session name, the tool name, the basename of a file path, and Claude's
+short description of a Bash command. The command line itself never does. herdr keeps titles in
+server memory and drops them when the pane closes.
+
 ## The state directory
 
 Everything shared between the hooks and the renderer lives in one directory, resolved by
@@ -160,11 +197,13 @@ Off by default, since the sounds are a matter of taste. Enable with
 bash tests/render.sh
 ```
 
-82 assertions. They drive the real scripts with a captured status payload and check the
+124 assertions. They drive the real scripts with a captured status payload and check the
 behaviour that matters: every field renders, each percentage band takes its colour, the row
 fits one line at 400, 75, 60 and 40 columns, a pending name is promoted and shown, the timestamp
-a hook writes is the timestamp the renderer reads, `Stop` emits valid `systemMessage` JSON, and
-installing twice leaves settings valid with no duplicate entries.
+a hook writes is the timestamp the renderer reads, `Stop` emits valid `systemMessage` JSON,
+installing twice leaves settings valid with no duplicate entries, and the installed herdr hook
+sends exactly the documented arguments to a stub `herdr`, ignores subagents, and stays silent
+and fast outside herdr.
 
 On Linux:
 
