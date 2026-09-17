@@ -84,10 +84,10 @@ build_settings() {
         --arg tt "$tt_cmd" --arg sn "$sn_cmd" --arg nt "$nt_cmd" --arg hp "$hp_cmd" \
         --argjson notify "$WITH_NOTIFICATIONS" --argjson herdr "$WITH_HERDR" '
         def strip:
-            map(.hooks |= map(select(
+            map(if (.hooks | type) == "array" then .hooks |= map(select(
                 (((.command // "") | contains($p)) or ((.command // "") | contains($pc))) | not
-            )))
-            | map(select((.hooks | length) > 0));
+            )) else . end)
+            | map(select((.hooks | type) != "array" or (.hooks | length) > 0));
         def add($ev; $entry):
             .[$ev] = ((.[$ev] // []) + [$entry]);
         def hp_entry: { type: "command", command: $hp, timeout: 5 };

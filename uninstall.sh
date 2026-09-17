@@ -33,10 +33,10 @@ esac
 if [ -f "$SETTINGS" ]; then
     cleaned=$(jq --arg p "$PREFIX" --arg pc "$PREFIX_CMD" '
         def strip:
-            map(.hooks |= map(select(
+            map(if (.hooks | type) == "array" then .hooks |= map(select(
                 (((.command // "") | contains($p)) or ((.command // "") | contains($pc))) | not
-            )))
-            | map(select((.hooks | length) > 0));
+            )) else . end)
+            | map(select((.hooks | type) != "array" or (.hooks | length) > 0));
 
         (if (((.statusLine.command // "") | contains($p))
              or ((.statusLine.command // "") | contains($pc)))
