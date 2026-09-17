@@ -55,7 +55,7 @@ if [ -f "$SETTINGS" ]; then
         [ (.statusLine.command // empty) ]
         + [ (.hooks // {}) | to_entries[] | .value[]? | .hooks[]? | (.command // empty) ]
         | map(select(test("statusline-command\\.sh|session-name-check\\.sh|update-terminal-title\\.sh|record-activity\\.sh")))
-        | map(select((contains($p) or contains($pc)) | not)) | unique | .[]
+        | map(select((contains($p + "/") or contains($pc + "/")) | not)) | unique | .[]
     ' "$SETTINGS" 2>/dev/null || true)
     if [ -n "$legacy" ]; then
         echo "warning: settings.json already references a status line outside $PREFIX:"
@@ -85,7 +85,7 @@ build_settings() {
         --argjson notify "$WITH_NOTIFICATIONS" --argjson herdr "$WITH_HERDR" '
         def strip:
             map(if (.hooks | type) == "array" then .hooks |= map(select(
-                (((.command // "") | contains($p)) or ((.command // "") | contains($pc))) | not
+                (((.command // "") | contains($p + "/")) or ((.command // "") | contains($pc + "/"))) | not
             )) else . end)
             | map(select((.hooks | type) != "array" or (.hooks | length) > 0));
         def add($ev; $entry):
@@ -94,8 +94,8 @@ build_settings() {
 
         .statusLine = { type: "command", command: $sl }
         | .hooks = ((.hooks // {})
-            | with_entries(.value |= strip)
-            | with_entries(select((.value | length) > 0))
+            | with_entries(if (.value | type) == "array" then .value |= strip else . end)
+            | with_entries(select((.value | type) != "array" or (.value | length) > 0))
             | add("PostToolUse"; { hooks: (
                   [ { type: "command", command: $ra } ]
                   + (if $herdr == 1 then [ hp_entry ] else [] end)
@@ -115,6 +115,7 @@ build_settings() {
                else . end)
             | (if $herdr == 1
                then add("PreToolUse";   { hooks: [ hp_entry ] })
+                  | add("PostToolUseFailure"; { hooks: [ hp_entry ] })
                   | add("SessionStart"; { matcher: "startup|resume|clear|compact", hooks: [ hp_entry ] })
                   | add("SessionEnd";   { hooks: [ hp_entry ] })
                else . end)
