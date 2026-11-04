@@ -1,37 +1,34 @@
 # claude-code-statusline
 
-A two-row status line for [Claude Code](https://claude.ai/code), plus the hooks that feed it.
+A one-row status line for [Claude Code](https://claude.ai/code), plus the hooks that feed it.
 
 ```
-Statusline Packaging │ ██████░░░░░░░░░ 42.5% │ in:1.2M out:8.9k │ Opus 5 │ high
-wt:fd-017 │ master* │ projects/demo-app │ $3.46 │ 1h31m │ +128-47 │ 🕐 08:19:06
+Statusline Packaging 42% │ Opus 5 high │ fd-017 master* projects/demo-app │ $3.46 1h31m +128-47 │ 08:19:06
 ```
 
-It joins both rows onto one line when the terminal is wide enough, and splits them when it is not.
+The row always stays on one line. When the terminal is too narrow, the renderer drops segments
+in this order until the row fits: clock, lines, duration, path, worktree, cost, session name.
+The percentage, model, effort and branch always stay. At 80 columns the example becomes:
+
+```
+Statusline Packaging 42% │ Opus 5 high │ fd-017 master* │ $3.46
+```
 
 ## What each field means
-
-**Row 1**
 
 | Field | Meaning |
 | --- | --- |
 | Session name | What this session is about. Claude sets it. See [Session names](#session-names). |
-| Context bar | Context window used. 15 blocks. Green, yellow at 60%, red at 80%. |
-| `in:` / `out:` | Total input and output tokens, as `12.3k` or `1.5M`. |
+| Percentage | Context window used. Grey below 30%, green from 30%, yellow from 50%, orange from 75%, red from 80%, bold red from 90%. |
 | Model | The model display name. |
 | Effort | Reasoning effort. Green for high, yellow for medium, red for low. |
-
-**Row 2**
-
-| Field | Meaning |
-| --- | --- |
-| `wt:` | Worktree name, when the session runs in a git worktree. |
-| Branch | Current branch, with `*` when the tree is dirty. |
+| Worktree | Worktree name, when the session runs in a git worktree. |
+| Branch | Current branch, with `*` when the tree is dirty. Cut to 24 characters. |
 | Path | Last two components of the working directory. |
 | `$` | Session cost so far. |
 | Duration | Wall-clock time in the session. |
 | `+/-` | Lines added and removed. |
-| 🕐 | Time of the last tool call. |
+| Clock | Time of the last tool call. |
 
 Fields that have no value are left out, separators and all.
 
@@ -98,16 +95,28 @@ Claude names its own sessions, and the mechanism is worth understanding before y
 **Claude cannot see its own session id.** So it cannot write
 `claude-session-<id>.name` directly. Instead:
 
-1. Claude writes the name to `claude-session-pending.name` in the state directory.
-2. On its next draw, the status line **promotes** that file to `claude-session-<session_id>.name`
-   and writes the id back to `claude-session-id`.
-3. Later updates can go straight to the real file.
+1. The `session-name-check.sh` hook prints the path to write to:
+   `claude-session-pending-<session_id>.name`, in the state directory.
+2. Claude writes the name there.
+3. On its next draw, the status line **promotes** that file to
+   `claude-session-<session_id>.name`.
 
-When `CLAUDE_CODE_SSE_PORT` is set, the pending and id files are keyed by that port, so two live
-sessions cannot pick up each other's names.
+**The pending path carries the session id, so never carry one across sessions.** Within a session
+the path is stable, and reusing it is how a rename works — the hook is quiet while a name is
+fresh, so nothing hands the path over on demand. A path remembered from an *earlier* session is a
+wrong path.
 
-The `session-name-check.sh` hook runs on every prompt. It asks Claude to set a name when none
-exists, and to reconsider one older than 10 minutes. It stays quiet when a name is already
+Two sessions that ran at once used to share one `claude-session-pending.name`, and whichever
+renderer drew first promoted the name, whoever wrote it. A leftover unkeyed file is therefore never
+promoted, only aged out: a name pending when you upgrade is dropped, and the hook asks for it again
+on the next prompt.
+
+**Every draw also sweeps pending files older than an hour**, from every session, not just its own.
+Promotion normally happens on the next draw a second later, so an hour-old pending file belongs to
+a session that is gone. Nothing sweeps a promoted `claude-session-<id>.name`.
+
+The hook runs on every prompt. It asks Claude to set a name when none exists, and to reconsider
+one older than 10 minutes. Both messages name the path. It stays quiet when a name is already
 pending.
 
 If no name file exists, the status line falls back to the session summary in
@@ -151,8 +160,9 @@ Off by default, since the sounds are a matter of taste. Enable with
 bash tests/render.sh
 ```
 
-45 assertions. They drive the real scripts with a captured status payload and check the
-behaviour that matters: every field renders, a pending name is promoted and shown, the timestamp
+82 assertions. They drive the real scripts with a captured status payload and check the
+behaviour that matters: every field renders, each percentage band takes its colour, the row
+fits one line at 400, 75, 60 and 40 columns, a pending name is promoted and shown, the timestamp
 a hook writes is the timestamp the renderer reads, `Stop` emits valid `systemMessage` JSON, and
 installing twice leaves settings valid with no duplicate entries.
 
@@ -163,7 +173,7 @@ docker run --rm -v "$PWD":/w -w /w debian:stable-slim \
   sh -c 'apt-get update -qq && apt-get install -y -qq bash jq git && bash tests/render.sh'
 ```
 
-The Linux run is not ceremony. It caught a real bug: the context bar was built with
+The Linux run is not ceremony. It caught a real bug: an earlier context bar was built with
 `tr ' ' '█'`, which is byte-oriented in GNU coreutils and emitted broken UTF-8 on Linux while
 looking perfect on macOS.
 

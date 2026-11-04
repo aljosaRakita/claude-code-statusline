@@ -2,11 +2,9 @@
 # Claude Code status line renderer.
 #
 # Claude Code pipes a JSON status payload on stdin and prints whatever this
-# writes to stdout. Two rows, joined onto one line when the terminal is wide
-# enough:
+# writes to stdout. One row, which drops low-priority segments to fit COLUMNS:
 #
-#   session name │ context bar │ tokens │ model │ effort
-#   worktree │ branch │ path │ cost │ duration │ lines │ clock
+#   session pct │ model effort │ worktree branch path │ cost duration lines │ clock
 #
 # Requires jq. Uses awk for arithmetic, so bc is not needed.
 
@@ -18,7 +16,7 @@ input=$(cat)
 
 RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"
 CYAN="\033[36m"; MAGENTA="\033[35m"; YELLOW="\033[33m"; GREEN="\033[32m"
-RED="\033[31m"; BLUE="\033[34m"; WHITE="\033[97m"; GRAY="\033[90m"
+RED="\033[31m"; ORANGE="\033[38;5;208m"; BLUE="\033[34m"; WHITE="\033[97m"; GRAY="\033[90m"
 
 # --- Extract values ---
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
@@ -27,8 +25,6 @@ project_dir=$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty')
 transcript_path=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
 model_display=$(printf '%s' "$input" | jq -r '.model.display_name // empty')
 used_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty')
-total_input=$(printf '%s' "$input" | jq -r '.context_window.total_input_tokens // 0')
-total_output=$(printf '%s' "$input" | jq -r '.context_window.total_output_tokens // 0')
 cost_usd=$(printf '%s' "$input" | jq -r '.cost.total_cost_usd // empty')
 duration_ms=$(printf '%s' "$input" | jq -r '.cost.total_duration_ms // 0')
 lines_added=$(printf '%s' "$input" | jq -r '.cost.total_lines_added // 0')
@@ -44,17 +40,27 @@ session_name=""
 name_file=$(cc_session_name_file "$session_id")
 
 # Promote a pending name written by Claude, which cannot see the session id.
-pending_file=$(cc_pending_name_file)
-if [ -f "$pending_file" ] && [ -n "$session_id" ]; then
-    mv "$pending_file" "$name_file" 2>/dev/null || true
+# The path is computed inside this guard on purpose: an empty session id would
+# otherwise key every session to one shared file again.
+if [ -n "$session_id" ]; then
+    pending_file=$(cc_pending_name_file "$session_id")
+    [ -f "$pending_file" ] && mv "$pending_file" "$name_file" 2>/dev/null
 fi
 
-# Hand the session id back so later updates can skip the pending file.
-[ -n "$session_id" ] && printf '%s' "$session_id" > "$(cc_session_id_file)" 2>/dev/null
-
-# Drop pending and id files left behind by sessions that ended over an hour ago.
-find "$(cc_state_dir)" -maxdepth 1 -name 'claude-session-pending-*.name' -mmin +60 -delete 2>/dev/null
-find "$(cc_state_dir)" -maxdepth 1 -name 'claude-session-id-*' -mmin +60 -delete 2>/dev/null
+# Drop files left behind by sessions that ended over an hour ago: the keyed
+# pending names, plus the unkeyed pending and id files the port-keyed scheme
+# wrote. An unkeyed pending file is aged out, never promoted -- promoting it
+# would hand one session another session's name, which is the bug this keying
+# exists to remove.
+#
+# `! -name '*.name'` keeps the id pattern off a name file whose session id
+# happens to begin "id-". No real session id does, since they are UUIDs, but the
+# pattern should not depend on that.
+find "$(cc_state_dir)" -maxdepth 1 -mmin +60 \
+    \( -name 'claude-session-pending-*.name' \
+       -o -name 'claude-session-pending.name' \
+       -o \( -name 'claude-session-id*' ! -name '*.name' \) \) \
+    -delete 2>/dev/null
 
 [ -f "$name_file" ] && session_name=$(cat "$name_file" 2>/dev/null)
 
@@ -75,50 +81,26 @@ if [ -z "$session_name" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path
 fi
 
 # --- Reasoning effort: payload first, then settings.json ---
-effort=$(printf '%s' "$input" | jq -r '.effort_level // empty')
+effort=$(printf '%s' "$input" | jq -r '.effort.level // .effort_level // empty')
 if [ -z "$effort" ] && [ -f "$HOME/.claude/settings.json" ]; then
     effort=$(jq -r '.effortLevel // empty' "$HOME/.claude/settings.json" 2>/dev/null)
 fi
 effort=${effort:-default}
 
-# Human-readable token counts: 12.3k, 1.5M.
-fmt_tokens() {
-    awk -v n="${1:-0}" 'BEGIN{
-        if (n >= 1000000) printf "%.1fM", n / 1000000;
-        else if (n >= 1000) printf "%.1fk", n / 1000;
-        else printf "%d", n;
-    }'
-}
-
-# --- Context window bar, 15 blocks ---
-ctx_section=""
+# --- Context percentage, coloured by band ---
+pct_section=""
 if [ -n "$used_pct" ]; then
     used_int=${used_pct%.*}
-    [ -z "$used_int" ] && used_int=0
-    filled=$((used_int * 15 / 100))
-    [ "$filled" -gt 15 ] && filled=15
-    [ "$filled" -lt 0 ] && filled=0
-    empty=$((15 - filled))
-
-    if   [ "$used_int" -ge 80 ]; then bar_color="$RED"
-    elif [ "$used_int" -ge 60 ]; then bar_color="$YELLOW"
-    else                              bar_color="$GREEN"
+    used_int=${used_int:-0}
+    if   [ "$used_int" -ge 90 ]; then pct_color="${BOLD}${RED}"
+    elif [ "$used_int" -ge 80 ]; then pct_color="$RED"
+    elif [ "$used_int" -ge 75 ]; then pct_color="$ORANGE"
+    elif [ "$used_int" -ge 50 ]; then pct_color="$YELLOW"
+    elif [ "$used_int" -ge 30 ]; then pct_color="$GREEN"
+    else                              pct_color="$GRAY"
     fi
-
-    # Built one glyph at a time on purpose. `tr ' ' '█'` looks tidier and is
-    # wrong: GNU tr works on bytes, so it maps the space to the first byte of
-    # the multi-byte block and emits broken UTF-8. It happens to work on macOS,
-    # which is how that bug reaches Linux users unnoticed.
-    bar=""
-    i=0
-    while [ "$i" -lt "$filled" ]; do bar="${bar}█"; i=$((i + 1)); done
-    i=0
-    while [ "$i" -lt "$empty" ];  do bar="${bar}░"; i=$((i + 1)); done
-    ctx_section="${bar_color}${bar}${RESET} ${WHITE}${used_pct}%${RESET}"
+    pct_section="${pct_color}${used_int}%${RESET}"
 fi
-
-token_section="${DIM}in:${RESET}${CYAN}$(fmt_tokens "$total_input")${RESET} ${DIM}out:${RESET}${CYAN}$(fmt_tokens "$total_output")${RESET}"
-model_section="${MAGENTA}${BOLD}${model_display}${RESET}"
 
 case "$effort" in
     high)   effort_color="$GREEN" ;;
@@ -126,13 +108,14 @@ case "$effort" in
     low)    effort_color="$RED" ;;
     *)      effort_color="$DIM" ;;
 esac
-effort_section="${effort_color}${effort}${RESET}"
+model_section="${MAGENTA}${BOLD}${model_display}${RESET} ${effort_color}${effort}${RESET}"
 
 # --- Git branch, with a dirty marker ---
 git_section=""
 if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
     branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
     [ -z "$branch" ] && branch="detached"
+    [ "${#branch}" -gt 24 ] && branch="${branch:0:24}…"
     dirty=""
     if ! git -C "$cwd" --no-optional-locks diff-index --quiet HEAD -- 2>/dev/null; then
         dirty="${YELLOW}*${RESET}"
@@ -140,15 +123,15 @@ if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
     git_section="${GREEN}${branch}${RESET}${dirty}"
 fi
 
-row2_wt=""
-[ -n "$worktree_name" ] && row2_wt="${BLUE}wt:${worktree_name}${RESET}"
+wt_section=""
+[ -n "$worktree_name" ] && wt_section="${BLUE}${worktree_name}${RESET}"
 
 short_path=$(printf '%s' "$cwd" | awk -F'/' '{if (NF>2) print $(NF-1)"/"$NF; else print $0}')
 path_section="${CYAN}${short_path}${RESET}"
 
 cost_section=""
 if [ -n "$cost_usd" ] && [ "$cost_usd" != "0" ]; then
-    cost_section=" │ ${YELLOW}\$$(printf '%.2f' "$cost_usd" 2>/dev/null || printf '%s' "$cost_usd")${RESET}"
+    cost_section="${YELLOW}\$$(printf '%.2f' "$cost_usd" 2>/dev/null || printf '%s' "$cost_usd")${RESET}"
 fi
 
 dur_section=""
@@ -156,52 +139,62 @@ if [ "${duration_ms:-0}" -gt 0 ] 2>/dev/null; then
     total_secs=$((duration_ms / 1000))
     hours=$((total_secs / 3600))
     minutes=$(((total_secs % 3600) / 60))
-    if   [ "$hours" -gt 0 ];   then dur_section=" │ ${BLUE}${hours}h${minutes}m${RESET}"
-    elif [ "$minutes" -gt 0 ]; then dur_section=" │ ${BLUE}${minutes}m${RESET}"
+    if   [ "$hours" -gt 0 ];   then dur_section="${BLUE}${hours}h${minutes}m${RESET}"
+    elif [ "$minutes" -gt 0 ]; then dur_section="${BLUE}${minutes}m${RESET}"
     fi
 fi
 
 lines_section=""
 if [ "${lines_added:-0}" -gt 0 ] || [ "${lines_removed:-0}" -gt 0 ]; then
-    lines_section=" │ ${GREEN}+${lines_added}${RESET}${RED}-${lines_removed}${RESET}"
+    lines_section="${GREEN}+${lines_added}${RESET}${RED}-${lines_removed}${RESET}"
 fi
 
-activity_section=""
+clock_section=""
 last_activity=$(cat "$(cc_activity_file)" 2>/dev/null)
-if [ -n "$last_activity" ]; then
-    activity_section=" │ ${GRAY}🕐 ${last_activity}${RESET}"
-fi
+[ -n "$last_activity" ] && clock_section="${GRAY}${last_activity}${RESET}"
 
 session_section=""
 if [ -n "$session_name" ]; then
     truncated="${session_name:0:20}"
     [ "${#session_name}" -gt 20 ] && truncated="${truncated}…"
-    session_section="${WHITE}${BOLD}${truncated}${RESET} │ "
+    session_section="${WHITE}${BOLD}${truncated}${RESET}"
 fi
 
-row1="${session_section}${ctx_section} │ ${token_section} │ ${model_section} │ ${effort_section}"
+# Join the non-empty arguments after the first with the first as separator.
+join_parts() {
+    local sep=$1 joined="" part
+    shift
+    for part in "$@"; do
+        [ -z "$part" ] && continue
+        joined="${joined:+${joined}${sep}}${part}"
+    done
+    printf '%s' "$joined"
+}
 
-# Join the leading segments, skipping any that are empty. Without this an
-# absent git branch leaves a doubled separator in the middle of the row.
-row2=""
-for seg in "$row2_wt" "$git_section" "$path_section"; do
-    [ -z "$seg" ] && continue
-    if [ -z "$row2" ]; then row2="$seg"; else row2="${row2} │ ${seg}"; fi
-done
-row2="${row2}${cost_section}${dur_section}${lines_section}${activity_section}"
+compose_line() {
+    join_parts ' │ ' \
+        "$(join_parts ' ' "$session_section" "$pct_section")" \
+        "$model_section" \
+        "$(join_parts ' ' "$wt_section" "$git_section" "$path_section")" \
+        "$(join_parts ' ' "$cost_section" "$dur_section" "$lines_section")" \
+        "$clock_section"
+}
 
-full_line="${row1} │ ${row2}"
+# Columns the line occupies: strip colours, then drop UTF-8 continuation bytes
+# so each character counts once.
+visible_width() {
+    printf '%b' "$1" | sed $'s/\033\\[[0-9;]*m//g' | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d '[:space:]'
+}
 
-# Wrap onto two rows only when the single line would not fit.
+# Always one row: drop the lowest-priority segment until the line fits.
+line=$(compose_line)
 term_width=${COLUMNS:-$(tput cols 2>/dev/null || echo 0)}
-needs_wrap=false
 if [ "${term_width:-0}" -gt 0 ] 2>/dev/null; then
-    visible=$(printf '%b' "$full_line" | sed $'s/\033\\[[0-9;]*m//g')
-    # ${#visible} counts bytes, not characters, in a C locale. Dropping the
-    # UTF-8 continuation bytes leaves one byte per character, which is the
-    # column count we actually want.
-    visible_len=$(printf '%s' "$visible" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d '[:space:]')
-    [ "${visible_len:-0}" -gt "$term_width" ] 2>/dev/null && needs_wrap=true
+    for segment in clock_section lines_section dur_section path_section wt_section cost_section session_section; do
+        [ "$(visible_width "$line")" -le "$term_width" ] && break
+        printf -v "$segment" '%s' ''
+        line=$(compose_line)
+    done
 fi
 
 # Set the terminal title too. Harmless when there is no tty.
@@ -211,8 +204,4 @@ if [ "${CC_STATUSLINE_NO_TITLE:-0}" != "1" ]; then
     { printf '\033]0;%s\007' "$term_title" > /dev/tty; } 2>/dev/null || true
 fi
 
-if [ "$needs_wrap" = true ]; then
-    printf '%b\n%b\n' "$row1" "$row2"
-else
-    printf '%b\n' "$full_line"
-fi
+printf '%b\n' "$line"

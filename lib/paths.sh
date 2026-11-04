@@ -38,29 +38,25 @@ cc_ensure_state_dir() {
 }
 
 # Name of the file holding the current session name, given a session id.
+# Refuses an empty id for the same reason cc_pending_name_file does: an empty one
+# keys every session to the single path "claude-session-.name".
 cc_session_name_file() {
+    [ -n "${1:-}" ] || return 1
     cc_state_file "claude-session-$1.name"
 }
 
 # Claude cannot see its own session id, so it writes a pending file instead.
-# The renderer promotes that file on its next draw. The SSE port keys the
-# pending file per session, so two live sessions cannot steal each other's name.
+# The renderer promotes that file on its next draw.
+#
+# The session id is the key, because it is the only value that is both unique per
+# session and present at every call site. This used to key on CLAUDE_CODE_SSE_PORT,
+# which is unset in an ordinary terminal -- so every session fell back to one
+# shared path and whichever renderer drew first promoted the name, whoever wrote
+# it. An empty id is refused rather than keyed, or it recreates that shared path
+# under the name "claude-session-pending-.name".
 cc_pending_name_file() {
-    if [ -n "${CLAUDE_CODE_SSE_PORT:-}" ]; then
-        cc_state_file "claude-session-pending-${CLAUDE_CODE_SSE_PORT}.name"
-    else
-        cc_state_file "claude-session-pending.name"
-    fi
-}
-
-# Where the renderer writes the session id back, so Claude can skip the
-# pending-file dance on later updates.
-cc_session_id_file() {
-    if [ -n "${CLAUDE_CODE_SSE_PORT:-}" ]; then
-        cc_state_file "claude-session-id-${CLAUDE_CODE_SSE_PORT}"
-    else
-        cc_state_file "claude-session-id"
-    fi
+    [ -n "${1:-}" ] || return 1
+    cc_state_file "claude-session-pending-$1.name"
 }
 
 # Timestamp of the last tool call, written by hooks/record-activity.sh.

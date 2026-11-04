@@ -35,41 +35,158 @@ ok()   { PASS=$((PASS+1)); printf 'PASS  %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf 'FAIL  %s\n' "$1"; [ $# -gt 1 ] && printf '        %s\n' "$2"; }
 has()  { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
+# An empty HOME, so the settings.json effort fallback cannot hide a broken payload read.
+render_raw() {
+    HOME="${WORK}/no-home" bash "${ROOT}/statusline-command.sh" < "${1:-$FIXTURE}" 2>/dev/null
+}
+
 # Render the status line and strip the colour codes.
 render() {
-    bash "${ROOT}/statusline-command.sh" < "${1:-$FIXTURE}" 2>/dev/null \
-        | sed 's/\x1b\[[0-9;]*m//g'
+    render_raw "$@" | sed 's/\x1b\[[0-9;]*m//g'
 }
+
+# Terminal columns of a stripped line: one byte per character once UTF-8
+# continuation bytes are gone.
+width_of() { printf '%s' "$1" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d '[:space:]'; }
 
 SESSION_ID=$(jq -r '.session_id' "$FIXTURE")
 
 echo "== 1. every field renders from a real payload =="
 out=$(render)
-for probe in "42.5%" "in:1.2M" "out:8.9k" "Opus 5" "high" "wt:fd-017" "Projects/demo-app" "\$3.46" "1h31m" "+128" "-47"; do
+for probe in "42%" "Opus 5" "high" "fd-017" "Projects/demo-app" "\$3.46" "1h31m" "+128" "-47"; do
     if has "$probe" "$out"; then ok "renders ${probe}"; else bad "renders ${probe}" "$out"; fi
 done
-if has "██████░░░░░░░░░" "$out"; then ok "context bar fills to 42.5%"; else bad "context bar fills to 42.5%" "$out"; fi
-# Regression guard: building the bar with `tr` produced broken UTF-8 on Linux
-# while looking correct on macOS.
+for gone in "░" "in:" "out:" "42.5%"; do
+    if has "$gone" "$out"; then bad "omits ${gone}" "$out"; else ok "omits ${gone}"; fi
+done
 if printf '%s' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
     ok "output is valid UTF-8"
 else bad "output is valid UTF-8" "$out"; fi
 
 echo
+echo "== 1b. the percentage takes the colour of its band =="
+for band in "29:90m" "30:32m" "49:32m" "50:33m" "74:33m" "75:38;5;208m" "79:38;5;208m" "80:31m" "89:31m" "90:1m\\033[31m"; do
+    pct=${band%%:*}
+    jq --argjson p "$pct" '.context_window.used_percentage = $p' "$FIXTURE" > "${WORK}/pct.json"
+    raw=$(render_raw "${WORK}/pct.json")
+    if has "$(printf '\033[%b%s%%' "${band#*:}" "$pct")" "$raw"; then
+        ok "${pct}% uses colour ${band#*:}"
+    else bad "${pct}% uses colour ${band#*:}" "$(printf '%s' "$raw" | od -c | head -3)"; fi
+done
+
+echo
+echo "== 1c. the line drops low-priority segments to fit one row =="
+for cols in 400 75 60 40 20; do
+    out=$(COLUMNS=$cols render)
+    rows=$(printf '%s\n' "$out" | wc -l | tr -d '[:space:]')
+    width=$(width_of "$out")
+    if [ "$rows" = "1" ]; then ok "one row at ${cols} columns"; else bad "one row at ${cols} columns" "$out"; fi
+    if [ "$width" -le "$cols" ] || [ "$cols" = "20" ]; then
+        ok "fits ${cols} columns (${width})"
+    else bad "fits ${cols} columns" "${width}: ${out}"; fi
+    if has "42%" "$out" && has "Opus 5" "$out"; then ok "keeps percentage and model at ${cols}"; else bad "keeps percentage and model at ${cols}" "$out"; fi
+done
+out=$(COLUMNS=60 render)
+if has "\$3.46" "$out" && has "Projects/demo-app" "$out" && ! has "+128" "$out"; then
+    ok "at 60 columns the line count goes before cost and path"
+else bad "at 60 columns the line count goes before cost and path" "$out"; fi
+out=$(COLUMNS=40 render)
+if has "\$3.46" "$out" && ! has "Projects/demo-app" "$out"; then
+    ok "at 40 columns the path goes before cost"
+else bad "at 40 columns the path goes before cost" "$out"; fi
+
+REPO="${WORK}/repo"
+git init -q -b feature/a-branch-name-far-longer-than-the-cap "$REPO"
+touch "${REPO}/untracked" && git -C "$REPO" add untracked
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q -m init
+printf 'x' > "${REPO}/untracked"
+jq --arg cwd "$REPO" '.cwd = $cwd' "$FIXTURE" > "${WORK}/branch.json"
+out=$(COLUMNS=60 render "${WORK}/branch.json")
+if has "feature/a-branch-name-fa…*" "$out" && [ "$(width_of "$out")" -le 60 ]; then
+    ok "a long dirty branch is cut and the row fits 60 columns"
+else bad "a long dirty branch is cut and the row fits 60 columns" "$(width_of "$out"): ${out}"; fi
+
+echo
 echo "== 2. a pending session name is promoted and shown =="
 mkdir -p "$CC_STATUSLINE_STATE_DIR"
-printf 'Packaging Run' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+printf 'Packaging Run' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name"
 out=$(render)
 if has "Packaging Run" "$out"; then ok "pending name reaches the status bar"; else bad "pending name reaches the status bar" "$out"; fi
-if [ ! -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name" ]; then
+if [ ! -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name" ]; then
     ok "pending file consumed"
 else bad "pending file consumed"; fi
 if [ -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name" ]; then
     ok "promoted to claude-session-<id>.name"
 else bad "promoted to claude-session-<id>.name"; fi
-if [ "$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-id" 2>/dev/null)" = "$SESSION_ID" ]; then
-    ok "session id written back for direct updates"
-else bad "session id written back for direct updates"; fi
+
+echo
+echo "== 2b. two live sessions cannot steal each other's name =="
+# The pending file carries a name Claude chose before it can know its own session
+# id. If that file is not keyed per session, whichever renderer draws first
+# promotes it -- so session B ends up wearing session A's name. Both assertions
+# below fail while the pending path is shared.
+#
+# Deliberately asymmetric: A writes, B draws. A symmetric script cannot run at
+# all on the broken code, because A's unpromoted pending file suppresses B's
+# nudge, so B never learns a path to write to.
+SID_A="aaaaaaaa-0000-4000-8000-00000000000a"
+SID_B="bbbbbbbb-0000-4000-8000-00000000000b"
+prompt_for() { jq -n --arg s "$1" '{session_id:$s, hook_event_name:"UserPromptSubmit"}'; }
+
+nudge_a=$(prompt_for "$SID_A" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
+path_a=$(printf '%s' "$nudge_a" | sed -n 's/.*Write one to \(.*\) reflecting.*/\1/p')
+if [ -n "$path_a" ]; then ok "session A is told where to write"; else bad "session A is told where to write" "$nudge_a"; fi
+printf 'name-A' > "$path_a"
+
+# Checked before B renders, so the assertion reads against the state the symptom
+# actually occurs in: A's name still pending, B's still absent. Either order
+# detects the bug -- reversing it does not make the test pass on broken code --
+# but reversed it would be asserting about a session that has already been given
+# a name, which is a different claim.
+nudge_b=$(prompt_for "$SID_B" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
+if has "No session name set" "$nudge_b"; then
+    ok "session B is still nudged while A's name is pending"
+else bad "session B is still nudged while A's name is pending" "got: '${nudge_b}'"; fi
+
+jq --arg s "$SID_B" '.session_id = $s' "$FIXTURE" > "${WORK}/status-b.json"
+render "${WORK}/status-b.json" >/dev/null
+stolen=$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" 2>/dev/null)
+if [ "$stolen" != "name-A" ]; then
+    ok "session B did not steal session A's name"
+else bad "session B did not steal session A's name" "B's name file holds '${stolen}'"; fi
+
+# An upgrade leaves an unkeyed pending file behind. Promoting it would hand this
+# session whatever the other one wrote -- the same steal, one last time.
+printf 'legacy-name' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+render "${WORK}/status-b.json" >/dev/null
+legacy=$(cat "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" 2>/dev/null)
+if [ "$legacy" != "legacy-name" ]; then
+    ok "an unkeyed pending file is never promoted"
+else bad "an unkeyed pending file is never promoted" "B's name file holds '${legacy}'"; fi
+
+# The stale sweep runs on every draw, from whichever session happens to draw, so
+# it must not eat a pending name another session has not promoted yet. Promotion
+# normally lands on the next draw, within a second; a pending file that has
+# survived an hour belongs to a session that is gone.
+SID_C="cccccccc-0000-4000-8000-00000000000c"
+pending_c="${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_C}.name"
+printf 'name-C' > "$pending_c"
+render "${WORK}/status-b.json" >/dev/null
+if [ -f "$pending_c" ]; then
+    ok "another session's fresh pending name survives a draw"
+else bad "another session's fresh pending name survives a draw"; fi
+
+touch -t 200001010000 "$pending_c"
+render "${WORK}/status-b.json" >/dev/null
+if [ ! -f "$pending_c" ]; then
+    ok "an abandoned pending name is swept"
+else bad "an abandoned pending name is swept"; fi
+
+# Leave no state behind: section 5 depends on section 2's promoted name file.
+rm -f "$pending_c" "$path_a" "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_A}.name" \
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-${SID_B}.name" \
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SID_B}.name" \
+      "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
 
 echo
 echo "== 3. the clock the hook writes is the clock the renderer reads =="
@@ -102,10 +219,10 @@ if [ -z "$out" ]; then ok "silent while the name is fresh"; else bad "silent whi
 rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-${SESSION_ID}.name"
 out=$(printf '%s' "$hook_in" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
 if has "No session name set" "$out"; then ok "nags when no name exists"; else bad "nags when no name exists" "$out"; fi
-printf 'Later' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+printf 'Later' > "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name"
 out=$(printf '%s' "$hook_in" | bash "${ROOT}/hooks/session-name-check.sh" 2>/dev/null)
 if [ -z "$out" ]; then ok "silent when a name is already pending"; else bad "silent when a name is already pending" "$out"; fi
-rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending.name"
+rm -f "${CC_STATUSLINE_STATE_DIR}/claude-session-pending-${SESSION_ID}.name"
 
 echo
 echo "== 6. install is idempotent and does not destroy settings =="
