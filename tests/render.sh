@@ -35,25 +35,65 @@ ok()   { PASS=$((PASS+1)); printf 'PASS  %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf 'FAIL  %s\n' "$1"; [ $# -gt 1 ] && printf '        %s\n' "$2"; }
 has()  { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
+# An empty HOME, so the settings.json effort fallback cannot hide a broken payload read.
+render_raw() {
+    HOME="${WORK}/no-home" bash "${ROOT}/statusline-command.sh" < "${1:-$FIXTURE}" 2>/dev/null
+}
+
 # Render the status line and strip the colour codes.
 render() {
-    bash "${ROOT}/statusline-command.sh" < "${1:-$FIXTURE}" 2>/dev/null \
-        | sed 's/\x1b\[[0-9;]*m//g'
+    render_raw "$@" | sed 's/\x1b\[[0-9;]*m//g'
 }
+
+# Terminal columns of a stripped line: one byte per character once UTF-8
+# continuation bytes are gone.
+width_of() { printf '%s' "$1" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d '[:space:]'; }
 
 SESSION_ID=$(jq -r '.session_id' "$FIXTURE")
 
 echo "== 1. every field renders from a real payload =="
 out=$(render)
-for probe in "42.5%" "in:1.2M" "out:8.9k" "Opus 5" "high" "wt:fd-017" "Projects/demo-app" "\$3.46" "1h31m" "+128" "-47"; do
+for probe in "42%" "Opus 5" "high" "fd-017" "Projects/demo-app" "\$3.46" "1h31m" "+128" "-47"; do
     if has "$probe" "$out"; then ok "renders ${probe}"; else bad "renders ${probe}" "$out"; fi
 done
-if has "██████░░░░░░░░░" "$out"; then ok "context bar fills to 42.5%"; else bad "context bar fills to 42.5%" "$out"; fi
-# Regression guard: building the bar with `tr` produced broken UTF-8 on Linux
-# while looking correct on macOS.
+for gone in "░" "in:" "out:" "42.5%"; do
+    if has "$gone" "$out"; then bad "omits ${gone}" "$out"; else ok "omits ${gone}"; fi
+done
 if printf '%s' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
     ok "output is valid UTF-8"
 else bad "output is valid UTF-8" "$out"; fi
+
+echo
+echo "== 1b. the percentage takes the colour of its band =="
+for band in "29:90m" "30:32m" "49:32m" "50:33m" "74:33m" "75:38;5;208m" "79:38;5;208m" "80:31m" "89:31m" "90:1m\\033[31m"; do
+    pct=${band%%:*}
+    jq --argjson p "$pct" '.context_window.used_percentage = $p' "$FIXTURE" > "${WORK}/pct.json"
+    raw=$(render_raw "${WORK}/pct.json")
+    if has "$(printf '\033[%b%s%%' "${band#*:}" "$pct")" "$raw"; then
+        ok "${pct}% uses colour ${band#*:}"
+    else bad "${pct}% uses colour ${band#*:}" "$(printf '%s' "$raw" | od -c | head -3)"; fi
+done
+
+echo
+echo "== 1c. the line drops low-priority segments to fit one row =="
+for cols in 400 75 60 40 20; do
+    out=$(COLUMNS=$cols render)
+    rows=$(printf '%s\n' "$out" | wc -l | tr -d '[:space:]')
+    width=$(width_of "$out")
+    if [ "$rows" = "1" ]; then ok "one row at ${cols} columns"; else bad "one row at ${cols} columns" "$out"; fi
+    if [ "$width" -le "$cols" ] || [ "$cols" = "20" ]; then
+        ok "fits ${cols} columns (${width})"
+    else bad "fits ${cols} columns" "${width}: ${out}"; fi
+    if has "42%" "$out" && has "Opus 5" "$out"; then ok "keeps percentage and model at ${cols}"; else bad "keeps percentage and model at ${cols}" "$out"; fi
+done
+out=$(COLUMNS=60 render)
+if has "\$3.46" "$out" && has "Projects/demo-app" "$out" && ! has "+128" "$out"; then
+    ok "at 60 columns the line count goes before cost and path"
+else bad "at 60 columns the line count goes before cost and path" "$out"; fi
+out=$(COLUMNS=40 render)
+if has "\$3.46" "$out" && ! has "Projects/demo-app" "$out"; then
+    ok "at 40 columns the path goes before cost"
+else bad "at 40 columns the path goes before cost" "$out"; fi
 
 echo
 echo "== 2. a pending session name is promoted and shown =="

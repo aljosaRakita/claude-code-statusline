@@ -1,37 +1,34 @@
 # claude-code-statusline
 
-A two-row status line for [Claude Code](https://claude.ai/code), plus the hooks that feed it.
+A one-row status line for [Claude Code](https://claude.ai/code), plus the hooks that feed it.
 
 ```
-Statusline Packaging │ ██████░░░░░░░░░ 42.5% │ in:1.2M out:8.9k │ Opus 5 │ high
-wt:fd-017 │ master* │ projects/demo-app │ $3.46 │ 1h31m │ +128-47 │ 🕐 08:19:06
+Statusline Packaging 42% │ Opus 5 high │ fd-017 master* projects/demo-app │ $3.46 1h31m +128-47 │ 08:19:06
 ```
 
-It joins both rows onto one line when the terminal is wide enough, and splits them when it is not.
+The row always stays on one line. When the terminal is too narrow, the renderer drops segments
+in this order until the row fits: clock, lines, duration, path, worktree, cost, session name.
+The percentage, model, effort and branch always stay. At 80 columns the example becomes:
+
+```
+Statusline Packaging 42% │ Opus 5 high │ fd-017 master* │ $3.46
+```
 
 ## What each field means
-
-**Row 1**
 
 | Field | Meaning |
 | --- | --- |
 | Session name | What this session is about. Claude sets it. See [Session names](#session-names). |
-| Context bar | Context window used. 15 blocks. Green, yellow at 60%, red at 80%. |
-| `in:` / `out:` | Total input and output tokens, as `12.3k` or `1.5M`. |
+| Percentage | Context window used. Grey below 30%, green from 30%, yellow from 50%, orange from 75%, red from 80%, bold red from 90%. |
 | Model | The model display name. |
 | Effort | Reasoning effort. Green for high, yellow for medium, red for low. |
-
-**Row 2**
-
-| Field | Meaning |
-| --- | --- |
-| `wt:` | Worktree name, when the session runs in a git worktree. |
-| Branch | Current branch, with `*` when the tree is dirty. |
+| Worktree | Worktree name, when the session runs in a git worktree. |
+| Branch | Current branch, with `*` when the tree is dirty. Cut to 24 characters. |
 | Path | Last two components of the working directory. |
 | `$` | Session cost so far. |
 | Duration | Wall-clock time in the session. |
 | `+/-` | Lines added and removed. |
-| 🕐 | Time of the last tool call. |
+| Clock | Time of the last tool call. |
 
 Fields that have no value are left out, separators and all.
 
@@ -163,8 +160,9 @@ Off by default, since the sounds are a matter of taste. Enable with
 bash tests/render.sh
 ```
 
-45 assertions. They drive the real scripts with a captured status payload and check the
-behaviour that matters: every field renders, a pending name is promoted and shown, the timestamp
+81 assertions. They drive the real scripts with a captured status payload and check the
+behaviour that matters: every field renders, each percentage band takes its colour, the row
+fits one line at 400, 75, 60 and 40 columns, a pending name is promoted and shown, the timestamp
 a hook writes is the timestamp the renderer reads, `Stop` emits valid `systemMessage` JSON, and
 installing twice leaves settings valid with no duplicate entries.
 
@@ -175,7 +173,7 @@ docker run --rm -v "$PWD":/w -w /w debian:stable-slim \
   sh -c 'apt-get update -qq && apt-get install -y -qq bash jq git && bash tests/render.sh'
 ```
 
-The Linux run is not ceremony. It caught a real bug: the context bar was built with
+The Linux run is not ceremony. It caught a real bug: an earlier context bar was built with
 `tr ' ' '█'`, which is byte-oriented in GNU coreutils and emitted broken UTF-8 on Linux while
 looking perfect on macOS.
 
