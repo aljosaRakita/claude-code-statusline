@@ -140,6 +140,7 @@ shows what the tool call is doing while it runs:
 | Prompt submitted | `Packaging Run · thinking` |
 | Tool call starts | `Packaging Run · editing install.sh` |
 | Tool call ends | `Packaging Run · thinking` |
+| Tool call fails | `Packaging Run · thinking` |
 | Turn finished | `Packaging Run` |
 | Session ended | cleared |
 
@@ -148,12 +149,14 @@ hooks that run beside its own Claude integration. Lifecycle state and session re
 with the integration. Outside herdr, for subagents, or when herdr fails, the hook exits
 silently. Each entry carries a 5-second timeout, and the hook adds its own 3-second limit
 where a `timeout` binary exists; a herdr server that hangs while its socket file still exists
-can cost up to 5 seconds per event on a system without one.
+can cost up to 5 seconds per event on a system without one. Parallel tool calls share one
+title: the last report wins, and a tool that finishes early switches the title to `· thinking`
+while its sibling still runs. Display-only, by design.
 
 The name comes from the promoted name file, then the `sessions-index.json` summary, then the
 first user message, the same chain the status line uses. Titles are one line, stripped of
-control characters, and cut at 80 characters, herdr's own cap; a very long name leaves no room
-for the activity.
+control characters, and cut at 80 characters (code points), herdr's own cap; a very long name
+leaves no room for the activity.
 
 What reaches herdr: the session name, the tool name, the basename of a file path, and Claude's
 short description of a Bash command. The command line itself never does. herdr keeps titles in
@@ -197,7 +200,7 @@ Off by default, since the sounds are a matter of taste. Enable with
 bash tests/render.sh
 ```
 
-124 assertions. They drive the real scripts with a captured status payload and check the
+133 assertions. They drive the real scripts with a captured status payload and check the
 behaviour that matters: every field renders, each percentage band takes its colour, the row
 fits one line at 400, 75, 60 and 40 columns, a pending name is promoted and shown, the timestamp
 a hook writes is the timestamp the renderer reads, `Stop` emits valid `systemMessage` JSON,
