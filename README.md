@@ -160,7 +160,7 @@ Off by default, since the sounds are a matter of taste. Enable with
 bash tests/render.sh
 ```
 
-81 assertions. They drive the real scripts with a captured status payload and check the
+82 assertions. They drive the real scripts with a captured status payload and check the
 behaviour that matters: every field renders, each percentage band takes its colour, the row
 fits one line at 400, 75, 60 and 40 columns, a pending name is promoted and shown, the timestamp
 a hook writes is the timestamp the renderer reads, `Stop` emits valid `systemMessage` JSON, and

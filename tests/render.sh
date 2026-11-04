@@ -95,6 +95,17 @@ if has "\$3.46" "$out" && ! has "Projects/demo-app" "$out"; then
     ok "at 40 columns the path goes before cost"
 else bad "at 40 columns the path goes before cost" "$out"; fi
 
+REPO="${WORK}/repo"
+git init -q -b feature/a-branch-name-far-longer-than-the-cap "$REPO"
+touch "${REPO}/untracked" && git -C "$REPO" add untracked
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q -m init
+printf 'x' > "${REPO}/untracked"
+jq --arg cwd "$REPO" '.cwd = $cwd' "$FIXTURE" > "${WORK}/branch.json"
+out=$(COLUMNS=60 render "${WORK}/branch.json")
+if has "feature/a-branch-name-fa…*" "$out" && [ "$(width_of "$out")" -le 60 ]; then
+    ok "a long dirty branch is cut and the row fits 60 columns"
+else bad "a long dirty branch is cut and the row fits 60 columns" "$(width_of "$out"): ${out}"; fi
+
 echo
 echo "== 2. a pending session name is promoted and shown =="
 mkdir -p "$CC_STATUSLINE_STATE_DIR"
