@@ -32,17 +32,22 @@ esac
 
 if [ -f "$SETTINGS" ]; then
     cleaned=$(jq --arg p "$PREFIX" --arg pc "$PREFIX_CMD" '
+        # Every hook command that points under the prefix directory is treated
+        # as owned by the installer, because the prefix is the package directory
+        # (default ~/.claude/statusline/). A foreign hook that merely references
+        # a path under it is stripped too. To keep such a hook, install with a
+        # dedicated --prefix so the two directories no longer overlap.
         def strip:
-            map(.hooks |= map(select(
-                (((.command // "") | contains($p)) or ((.command // "") | contains($pc))) | not
-            )))
-            | map(select((.hooks | length) > 0));
+            map(if (.hooks | type) == "array" then .hooks |= map(select(
+                (((.command // "") | contains($p + "/")) or ((.command // "") | contains($pc + "/"))) | not
+            )) else . end)
+            | map(select((.hooks | type) != "array" or (.hooks | length) > 0));
 
-        (if (((.statusLine.command // "") | contains($p))
-             or ((.statusLine.command // "") | contains($pc)))
+        (if (((.statusLine.command // "") | contains($p + "/"))
+             or ((.statusLine.command // "") | contains($pc + "/")))
          then del(.statusLine) else . end)
-        | (if .hooks then .hooks |= with_entries(.value |= strip) else . end)
-        | (if .hooks then .hooks |= with_entries(select((.value | length) > 0)) else . end)
+        | (if .hooks then .hooks |= with_entries(if (.value | type) == "array" then .value |= strip else . end) else . end)
+        | (if .hooks then .hooks |= with_entries(select((.value | type) != "array" or (.value | length) > 0)) else . end)
     ' "$SETTINGS")
 
     if [ "$DRY_RUN" = "1" ]; then

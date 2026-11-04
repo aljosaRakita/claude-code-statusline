@@ -11,6 +11,8 @@
 CC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/paths.sh
 . "${CC_DIR}/lib/paths.sh"
+# shellcheck source=lib/session-name.sh
+. "${CC_DIR}/lib/session-name.sh"
 
 input=$(cat)
 
@@ -34,9 +36,7 @@ worktree_name=$(printf '%s' "$input" | jq -r '.worktree.name // empty')
 cc_ensure_state_dir
 
 # --- Session name ---
-# Priority: the name file Claude manages, then the sessions index summary,
-# then the first user message in the transcript.
-session_name=""
+# Priority: the name file Claude manages, then the sessions index summary, then the first user message. See lib/session-name.sh.
 name_file=$(cc_session_name_file "$session_id")
 
 # Promote a pending name written by Claude, which cannot see the session id.
@@ -62,23 +62,7 @@ find "$(cc_state_dir)" -maxdepth 1 -mmin +60 \
        -o \( -name 'claude-session-id*' ! -name '*.name' \) \) \
     -delete 2>/dev/null
 
-[ -f "$name_file" ] && session_name=$(cat "$name_file" 2>/dev/null)
-
-if [ -z "$session_name" ] && [ -n "$project_dir" ] && [ -n "$session_id" ]; then
-    index_file="$HOME/.claude/projects/$(printf '%s' "$project_dir" | sed 's|^/|-|; s|/|-|g')/sessions-index.json"
-    if [ -f "$index_file" ]; then
-        session_name=$(jq -r --arg sid "$session_id" \
-            '.entries[]? | select(.sessionId == $sid) | .summary // empty' \
-            "$index_file" 2>/dev/null)
-    fi
-fi
-
-if [ -z "$session_name" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-    session_name=$(head -50 "$transcript_path" | jq -r '
-        select(.type == "user") | .message.content |
-        if type == "string" and (startswith("<") | not) then . else empty end
-    ' 2>/dev/null | head -1)
-fi
+session_name=$(cc_session_name "$session_id" "$transcript_path" "$project_dir")
 
 # --- Reasoning effort: payload first, then settings.json ---
 effort=$(printf '%s' "$input" | jq -r '.effort.level // .effort_level // empty')
